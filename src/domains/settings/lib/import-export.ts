@@ -5,7 +5,7 @@
 import type { Provider, ApiKey } from '@/types';
 import { useStore } from '@/store';
 import { encryptApiKey } from './secure-storage';
-import { generateId } from './helpers';
+import { generateId } from '@/shared/lib/helpers';
 
 /**
  * 导出数据格式
@@ -14,11 +14,11 @@ export interface ExportData {
   version: string;
   exportedAt: string;
   providers?: Provider[];
-  services?: Provider[]; // legacy
+  services?: Provider[]; // legacy (import only)
   apiKeys: Array<{
     id?: string;
     providerId?: string;
-    serviceId?: string; // legacy
+    serviceId?: string; // legacy (import only)
     key: string; // 已加密的密钥
     name?: string;
     note?: string;
@@ -67,7 +67,6 @@ export async function exportData(): Promise<void> {
     return {
       id: key.id,
       providerId: key.providerId,
-      serviceId: key.providerId, // legacy
       key: decryptedKey,
       name: key.name,
       note: key.note,
@@ -81,7 +80,6 @@ export async function exportData(): Promise<void> {
     version: '2.0.0',
     exportedAt: new Date().toISOString(),
     providers,
-    services: providers, // legacy
     apiKeys: exportKeys,
   };
 

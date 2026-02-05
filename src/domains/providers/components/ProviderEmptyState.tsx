@@ -2,7 +2,7 @@ import { Plus, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useStore } from '@/store';
 
-export default function EmptyState() {
+export default function ProviderEmptyState() {
   const { t } = useTranslation();
   const { setAddProviderModalOpen, setSettingsOpen } = useStore();
 

@@ -1,11 +1,13 @@
 /**
  * 提供方模型
  */
+export type ApiProviderType = 'openai' | 'claude' | 'generic';
+
 export interface Provider {
   id: string;
   name: string;
   baseUrl: string;
-  apiType?: 'openai' | 'claude' | 'generic';
+  apiType?: ApiProviderType;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -75,6 +77,7 @@ export interface ProviderWithKeys extends Provider {
 export interface AddProviderForm {
   name: string;
   baseUrl: string;
+  apiType?: ApiProviderType;
 }
 
 /**

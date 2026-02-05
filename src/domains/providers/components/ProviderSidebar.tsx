@@ -1,10 +1,10 @@
 import { useStore } from '@/store';
-import { Plus, Server, Key, Trash2, Settings } from 'lucide-react';
-import { cn } from '@/utils/cn';
+import { Plus, Server, Trash2, Settings } from 'lucide-react';
+import { cn } from '@/shared/lib/cn';
 import { useTranslation } from 'react-i18next';
-import LanguageSwitcher from './LanguageSwitcher';
+import LanguageSwitcher from '@/shared/components/LanguageSwitcher';
 
-export default function Sidebar() {
+export default function ProviderSidebar() {
   const { t } = useTranslation();
   const {
     getProvidersWithKeys,
@@ -41,7 +41,6 @@ export default function Sidebar() {
             <Plus className="w-3.5 h-3.5" />
             {t('sidebar.addProvider')}
           </button>
-          <LanguageSwitcher />
         </div>
       </div>
 
@@ -76,32 +75,18 @@ export default function Sidebar() {
                     {provider.baseUrl}
                   </p>
                 </div>
-
-                {/* 状态指示 */}
-                <div className="flex flex-col items-end gap-1">
-                  <div className="flex items-center gap-1">
-                    <span className="status-dot status-dot-valid" />
-                    <span className="text-xs text-slate-600">
-                      {provider.validCount}
-                    </span>
-                  </div>
-                  {provider.expiredCount > 0 && (
-                    <div className="flex items-center gap-1">
-                      <span className="status-dot status-dot-expired" />
-                      <span className="text-xs text-slate-400">
-                        {provider.expiredCount}
-                      </span>
-                    </div>
-                  )}
-                </div>
               </div>
 
-              {/* Key 数量 */}
-              <div className="flex items-center gap-1.5 mt-2">
-                <Key className="w-3 h-3 text-slate-400" />
-                <span className="text-xs text-slate-500">
-                  {t('sidebar.keyCount', { count: provider.keys.length })}
-                </span>
+              {/* 状态统计（绿/红） */}
+              <div className="flex items-center gap-4 mt-2">
+                <div className="flex items-center gap-1">
+                  <span className="status-dot status-dot-valid" />
+                  <span className="text-xs text-slate-600">{provider.validCount}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="status-dot status-dot-expired" />
+                  <span className="text-xs text-slate-400">{provider.expiredCount}</span>
+                </div>
               </div>
 
               {/* 删除按钮 */}
@@ -130,13 +115,16 @@ export default function Sidebar() {
         <p className="text-xs text-slate-400">
           {t('sidebar.totalProviders', { count: providers.length })}
         </p>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="p-2 rounded-lg text-slate-400 hover:text-primary-600 hover:bg-primary-50 transition-all"
-          title={t('settings.title') || '设置'}
-        >
-          <Settings className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <LanguageSwitcher />
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="p-2 rounded-lg text-slate-400 hover:text-primary-600 hover:bg-primary-50 transition-all"
+            title={t('settings.title') || '设置'}
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </aside>
   );

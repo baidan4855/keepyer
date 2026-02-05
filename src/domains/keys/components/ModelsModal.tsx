@@ -21,7 +21,7 @@ function joinArray(arr?: string[]): string {
   return arr.join(' | ');
 }
 
-export function ModelsModal() {
+export default function ModelsModal() {
   const { t } = useTranslation();
   const { isModelsModalOpen, modelsModalKeyId, getKeyById, setModelsModalOpen } = useStore();
 

@@ -2,26 +2,28 @@ import { useStore } from '@/store';
 import { X, ChevronDown } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cn } from '@/utils/cn';
-import { isValidUrl } from '@/utils/helpers';
+import { cn } from '@/shared/lib/cn';
+import { isValidUrl } from '@/shared/lib/helpers';
+import { toast } from '@/shared/lib/toast';
+import type { ApiProviderType } from '@/types';
 
-type ApiType = 'openai' | 'claude' | 'generic';
+type ApiType = ApiProviderType;
 
 interface SelectOption {
   value: ApiType;
   label: string;
 }
 
-const apiTypeOptions: SelectOption[] = [
-  { value: 'openai', label: 'OpenAI 兼容' },
-  { value: 'claude', label: 'Claude (Anthropic)' },
-  { value: 'generic', label: '通用' },
-];
-
 // 自定义下拉选择器组件
 function ApiTypeSelect({ value, onChange }: { value: ApiType; onChange: (v: ApiType) => void }) {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const apiTypeOptions: SelectOption[] = [
+    { value: 'openai', label: t('modals.addProvider.apiTypes.openai') },
+    { value: 'claude', label: t('modals.addProvider.apiTypes.claude') },
+    { value: 'generic', label: t('modals.addProvider.apiTypes.generic') },
+  ];
   const selectedOption = apiTypeOptions.find(opt => opt.value === value);
 
   // 点击外部关闭下拉框
@@ -101,7 +103,7 @@ export default function AddProviderModal() {
   const [apiType, setApiType] = useState<ApiType>('openai');
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -120,12 +122,17 @@ export default function AddProviderModal() {
       return;
     }
 
-    addProvider({
-      name: name.trim(),
-      baseUrl: baseUrl.trim(),
-      apiType,
-    } as any);
-    handleClose();
+    try {
+      addProvider({
+        name: name.trim(),
+        baseUrl: baseUrl.trim(),
+        apiType,
+      });
+      toast.success(t('notifications.saveSuccess') || '保存成功');
+      handleClose();
+    } catch (err) {
+      toast.error(t('notifications.saveFailed') || '保存失败');
+    }
   };
 
   const handleClose = () => {
@@ -195,7 +202,7 @@ export default function AddProviderModal() {
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                API 类型
+                {t('modals.addProvider.apiTypeLabel')}
               </label>
               <ApiTypeSelect value={apiType} onChange={setApiType} />
             </div>

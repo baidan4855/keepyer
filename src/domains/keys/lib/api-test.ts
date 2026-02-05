@@ -2,8 +2,11 @@
  * API Key 测试工具
  */
 
-import { httpRequest } from './secure-storage';
+import { httpRequest } from '@/domains/settings/lib/secure-storage';
 import type { ApiModel } from '@/types';
+import i18n from '@/i18n';
+
+const t = (key: string, options?: Record<string, any>) => i18n.t(key, options) as string;
 
 export type ApiTestStatus = 'idle' | 'loading' | 'success' | 'error';
 export type ApiTestType = 'openai' | 'claude' | 'generic';
@@ -66,8 +69,8 @@ async function testOpenAIKey(baseUrl: string, apiKey: string): Promise<ApiTestRe
       const modelCount = models.length || 0;
       return {
         status: 'success',
-        message: 'API Key 有效',
-        details: `找到 ${modelCount} 个可用模型`,
+        message: t('apiTest.validKey'),
+        details: t('apiTest.modelsFound', { count: modelCount }),
         models: models.map((m: any) => ({
           id: m.id,
           name: m.name || m.id,
@@ -84,21 +87,21 @@ async function testOpenAIKey(baseUrl: string, apiKey: string): Promise<ApiTestRe
     } else if (response.status === 401) {
       return {
         status: 'error',
-        message: 'API Key 无效',
-        details: '认证失败，请检查密钥是否正确',
+        message: t('apiTest.invalidKey'),
+        details: t('apiTest.authFailed'),
       };
     } else {
       return {
         status: 'error',
-        message: '请求失败',
+        message: t('apiTest.requestFailed'),
         details: `HTTP ${response.status}: ${response.statusText}`,
       };
     }
   } catch (error) {
     return {
       status: 'error',
-      message: '连接失败',
-      details: error instanceof Error ? error.message : '无法连接到服务器',
+      message: t('apiTest.connectionFailed'),
+      details: error instanceof Error ? error.message : t('apiTest.unableConnect'),
     };
   }
 }
@@ -127,8 +130,8 @@ async function testClaudeKey(baseUrl: string, apiKey: string): Promise<ApiTestRe
       const modelCount = models.length || 0;
       return {
         status: 'success',
-        message: 'API Key 有效',
-        details: `找到 ${modelCount} 个可用模型`,
+        message: t('apiTest.validKey'),
+        details: t('apiTest.modelsFound', { count: modelCount }),
         models: models.map((m: any) => ({
           id: m.id,
           name: m.name || m.display_name || m.id,
@@ -172,27 +175,27 @@ async function testClaudeKey(baseUrl: string, apiKey: string): Promise<ApiTestRe
     if (messagesResponse.status === 200) {
       return {
         status: 'success',
-        message: 'API Key 有效',
-        details: '成功连接到 Anthropic API',
+        message: t('apiTest.validKey'),
+        details: t('apiTest.anthropicConnected'),
       };
     } else if (messagesResponse.status === 401) {
       return {
         status: 'error',
-        message: 'API Key 无效',
-        details: '认证失败，请检查密钥是否正确',
+        message: t('apiTest.invalidKey'),
+        details: t('apiTest.authFailed'),
       };
     } else {
       return {
         status: 'error',
-        message: '请求失败',
+        message: t('apiTest.requestFailed'),
         details: `HTTP ${messagesResponse.status}: ${messagesResponse.statusText}`,
       };
     }
   } catch (error) {
     return {
       status: 'error',
-      message: '连接失败',
-      details: error instanceof Error ? error.message : '无法连接到服务器',
+      message: t('apiTest.connectionFailed'),
+      details: error instanceof Error ? error.message : t('apiTest.unableConnect'),
     };
   }
 }
@@ -215,21 +218,21 @@ async function testGenericApi(baseUrl: string, apiKey: string): Promise<ApiTestR
       // 401 means the server is responding but the key is invalid
       return {
         status: 'success',
-        message: '提供方可达',
-        details: response.status === 401 ? 'API Key 可能无效' : '提供方响应正常',
+        message: t('apiTest.providerReachable'),
+        details: response.status === 401 ? t('apiTest.keyMaybeInvalid') : t('apiTest.providerHealthy'),
       };
     }
 
     return {
       status: 'error',
-      message: '提供方不可达',
+      message: t('apiTest.providerUnreachable'),
       details: `HTTP ${response.status}: ${response.statusText}`,
     };
   } catch (error) {
     return {
       status: 'error',
-      message: '连接失败',
-      details: error instanceof Error ? error.message : '无法连接到服务器',
+      message: t('apiTest.connectionFailed'),
+      details: error instanceof Error ? error.message : t('apiTest.unableConnect'),
     };
   }
 }

@@ -16,12 +16,8 @@ import type {
 import {
   generateId,
   buildProviderWithKeys,
-} from '@/utils/helpers';
-import { encryptApiKey } from '@/utils/secure-storage';
-
-interface AddProviderFormExtended extends AddProviderForm {
-  apiType?: 'openai' | 'claude' | 'generic';
-}
+} from '@/shared/lib/helpers';
+import { encryptApiKey } from '@/domains/settings/lib/secure-storage';
 
 interface StoreActions {
   // 提供方操作
@@ -97,12 +93,11 @@ export const useStore = create<AppStore>()(
 
       // 提供方操作
       addProvider: (data) => {
-        const extendedData = data as AddProviderFormExtended;
         const newProvider: Provider = {
           id: generateId(),
           name: data.name,
           baseUrl: data.baseUrl,
-          apiType: extendedData.apiType || 'openai',
+          apiType: data.apiType || 'openai',
           createdAt: new Date(),
           updatedAt: new Date(),
         };

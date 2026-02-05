@@ -69,7 +69,7 @@ export function buildProviderWithKeys(
       return b.createdAt.getTime() - a.createdAt.getTime();
     });
 
-  const validCount = providerKeys.filter((k) => k.status === 'valid').length;
+  const validCount = providerKeys.filter((k) => k.status === 'valid' || k.status === 'expiring-soon').length;
   const expiredCount = providerKeys.filter((k) => k.status === 'expired').length;
 
   return {

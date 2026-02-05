@@ -33,6 +33,12 @@
       "providerNamePlaceholder": "例如: OpenAI",
       "baseUrl": "提供方地址",
       "baseUrlPlaceholder": "https://api.openai.com",
+      "apiTypeLabel": "API 类型",
+      "apiTypes": {
+        "openai": "OpenAI 兼容",
+        "claude": "Claude (Anthropic)",
+        "generic": "通用"
+      },
       "cancel": "取消",
       "submit": "添加",
       "error": {
@@ -96,6 +102,7 @@
     "importData": "导入数据",
     "importDataDesc": "从 JSON 文件恢复数据",
     "exportSuccess": "数据导出成功",
+    "exportError": "数据导出失败",
     "importSuccess": "数据导入成功",
     "importError": "导入数据失败",
     "invalidFile": "无效的文件格式",
@@ -136,6 +143,14 @@
     "changePassword": "修改密码",
     "changePasswordFailed": "原密码错误或修改失败"
   },
+  "notifications": {
+    "saveSuccess": "保存成功",
+    "saveFailed": "保存失败",
+    "copySuccess": "复制成功",
+    "copyFailed": "复制失败",
+    "passwordSetupSuccess": "密码设置成功",
+    "passwordChangeSuccess": "密码修改成功"
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",
@@ -167,5 +182,19 @@
     "modelMaxInput": "最大输入",
     "modelMaxOutput": "最大输出",
     "modelMaxReasoning": "最大推理"
+  },
+  "apiTest": {
+    "validKey": "API Key 有效",
+    "invalidKey": "API Key 无效",
+    "requestFailed": "请求失败",
+    "connectionFailed": "连接失败",
+    "authFailed": "认证失败，请检查密钥是否正确",
+    "modelsFound": "找到 {{count}} 个可用模型",
+    "anthropicConnected": "成功连接到 Anthropic API",
+    "providerReachable": "提供方可达",
+    "providerUnreachable": "提供方不可达",
+    "keyMaybeInvalid": "API Key 可能无效",
+    "providerHealthy": "提供方响应正常",
+    "unableConnect": "无法连接到服务器"
   }
 }

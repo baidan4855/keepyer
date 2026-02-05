@@ -2,8 +2,9 @@ import { useStore } from '@/store';
 import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cn } from '@/utils/cn';
-import { decryptApiKey, isEncrypted } from '@/utils/secure-storage';
+import { cn } from '@/shared/lib/cn';
+import { decryptApiKey, isEncrypted } from '@/domains/settings/lib/secure-storage';
+import { toast } from '@/shared/lib/toast';
 import type { AddKeyForm } from '@/types';
 
 // 自定义日期选择器组件
@@ -280,32 +281,38 @@ export default function AddKeyModal() {
     const keyTrimmed = key.trim();
     const isKeyChanged = !isEditing || keyTrimmed !== originalKey;
 
-    // 构建数据
-    if (isEditing && editKeyId) {
-      // 编辑模式：只传递修改的字段
-      const updateData: Partial<AddKeyForm> = {
-        name: name.trim() || undefined,
-        note: note.trim() || undefined,
-        expiresAt: neverExpire ? undefined : expiresAt ? new Date(expiresAt) : undefined,
-      };
+    try {
+      // 构建数据
+      if (isEditing && editKeyId) {
+        // 编辑模式：只传递修改的字段
+        const updateData: Partial<AddKeyForm> = {
+          name: name.trim() || undefined,
+          note: note.trim() || undefined,
+          expiresAt: neverExpire ? undefined : expiresAt ? new Date(expiresAt) : undefined,
+        };
 
-      // 只有密钥被修改时才添加 key 字段
-      if (isKeyChanged) {
-        updateData.key = keyTrimmed;
+        // 只有密钥被修改时才添加 key 字段
+        if (isKeyChanged) {
+          updateData.key = keyTrimmed;
+        }
+
+        await updateKey(editKeyId, updateData);
+      } else {
+        // 新增模式：传递所有数据
+        const data: AddKeyForm = {
+          key: keyTrimmed,
+          name: name.trim() || undefined,
+          note: note.trim() || undefined,
+          expiresAt: neverExpire ? undefined : expiresAt ? new Date(expiresAt) : undefined,
+        };
+        await addKey(selectedProviderId, data);
       }
-
-      await updateKey(editKeyId, updateData);
-    } else {
-      // 新增模式：传递所有数据
-      const data: AddKeyForm = {
-        key: keyTrimmed,
-        name: name.trim() || undefined,
-        note: note.trim() || undefined,
-        expiresAt: neverExpire ? undefined : expiresAt ? new Date(expiresAt) : undefined,
-      };
-      await addKey(selectedProviderId, data);
+      toast.success(t('notifications.saveSuccess') || '保存成功');
+      setAddKeyModalOpen(false);
+    } catch (err) {
+      const message = t('notifications.saveFailed') || '保存失败';
+      toast.error(message);
     }
-    setAddKeyModalOpen(false);
   };
 
   const handleClose = () => {

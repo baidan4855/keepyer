@@ -33,6 +33,12 @@
       "providerNamePlaceholder": "e.g. OpenAI",
       "baseUrl": "Provider URL",
       "baseUrlPlaceholder": "https://api.openai.com",
+      "apiTypeLabel": "API Type",
+      "apiTypes": {
+        "openai": "OpenAI Compatible",
+        "claude": "Claude (Anthropic)",
+        "generic": "Generic"
+      },
       "cancel": "Cancel",
       "submit": "Add",
       "error": {
@@ -96,6 +102,7 @@
     "importData": "Import Data",
     "importDataDesc": "Restore data from a JSON file",
     "exportSuccess": "Data exported successfully",
+    "exportError": "Failed to export data",
     "importSuccess": "Data imported successfully",
     "importError": "Failed to import data",
     "invalidFile": "Invalid file format",
@@ -136,6 +143,14 @@
     "changePassword": "Change Password",
     "changePasswordFailed": "Current password is incorrect or change failed"
   },
+  "notifications": {
+    "saveSuccess": "Saved successfully",
+    "saveFailed": "Save failed",
+    "copySuccess": "Copied to clipboard",
+    "copyFailed": "Copy failed",
+    "passwordSetupSuccess": "Password set successfully",
+    "passwordChangeSuccess": "Password changed successfully"
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",
@@ -167,5 +182,19 @@
     "modelMaxInput": "Max Input",
     "modelMaxOutput": "Max Output",
     "modelMaxReasoning": "Max Reasoning"
+  },
+  "apiTest": {
+    "validKey": "API Key Valid",
+    "invalidKey": "API Key Invalid",
+    "requestFailed": "Request Failed",
+    "connectionFailed": "Connection Failed",
+    "authFailed": "Authentication failed. Please check your key.",
+    "modelsFound": "Found {{count}} available models",
+    "anthropicConnected": "Successfully connected to Anthropic API",
+    "providerReachable": "Provider reachable",
+    "providerUnreachable": "Provider unreachable",
+    "keyMaybeInvalid": "API Key may be invalid",
+    "providerHealthy": "Provider responded normally",
+    "unableConnect": "Unable to connect to server"
   }
 }

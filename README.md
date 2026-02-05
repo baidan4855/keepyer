@@ -18,7 +18,7 @@
 
 - Node.js 18+
 - npm
-- Rust (用于构建 Tauri)
+- Rust 1.88+ (用于构建 Tauri)
 
 #### 安装 Rust
 
@@ -57,6 +57,20 @@ npm run tauri:build:debug
 ```
 
 构建产物会输出到 `src-tauri/target/release/bundle/` 目录。
+
+## 项目结构
+
+```
+src/
+  app/                 应用入口与布局
+  domains/             按领域划分的功能模块
+    providers/         提供方管理
+    keys/              API Key 管理
+    settings/          安全与设置
+  shared/              共享组件与工具
+  i18n/                多语言资源
+  types/               全局类型定义
+```
 
 ## 使用说明
 
@@ -110,4 +124,8 @@ npm run tauri:build:debug
 
 ## 许可证
 
-MIT License
+MIT License，详见 `LICENSE`。
+
+## 贡献
+
+欢迎提交 Issue 或 PR。请先阅读 `CONTRIBUTING.md`。
