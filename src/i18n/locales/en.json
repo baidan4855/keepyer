@@ -1,0 +1,171 @@
+{
+  "app": {
+    "name": "Keeyper",
+    "description": "API Key Management Tool"
+  },
+  "sidebar": {
+    "addProvider": "Add Provider",
+    "noProviders": "No providers yet",
+    "noProvidersHint": "Click button above to add",
+    "totalProviders": "{{count}} providers total",
+    "keyCount": "{{count}} keys"
+  },
+  "mainContent": {
+    "totalKeys": "Total Keys",
+    "valid": "Valid",
+    "expired": "Expired",
+    "noKeys": "No keys yet",
+    "noKeysHint": "Click button above to add an API key",
+    "addKey": "Add Key"
+  },
+  "keyStatus": {
+    "valid": "Valid",
+    "expired": "Expired",
+    "expiringSoon": "Expires today",
+    "expiringDays": "Expires in {{days}} days",
+    "neverExpires": "Never expires",
+    "expiredDate": "Expired"
+  },
+  "modals": {
+    "addProvider": {
+      "title": "Add Provider",
+      "providerName": "Provider Name",
+      "providerNamePlaceholder": "e.g. OpenAI",
+      "baseUrl": "Provider URL",
+      "baseUrlPlaceholder": "https://api.openai.com",
+      "cancel": "Cancel",
+      "submit": "Add",
+      "error": {
+        "requiredName": "Please enter a provider name",
+        "requiredUrl": "Please enter a provider URL",
+        "invalidUrl": "Please enter a valid URL"
+      }
+    },
+    "addKey": {
+      "title": "Add API Key",
+      "key": "API Key",
+      "keyPlaceholder": "sk-...",
+      "name": "Name (optional)",
+      "namePlaceholder": "e.g. GPT-4 Key",
+      "note": "Note (optional)",
+      "notePlaceholder": "Add a note...",
+      "expiresAt": "Expiration Date",
+      "neverExpires": "Never expires",
+      "cancel": "Cancel",
+      "submit": "Add",
+      "error": {
+        "requiredKey": "Please enter an API Key",
+        "noProvider": "No provider selected"
+      }
+    },
+    "editKey": {
+      "title": "Edit API Key",
+      "save": "Save"
+    },
+    "deleteConfirm": {
+      "title": "Confirm Delete",
+      "provider": "Provider",
+      "apiKey": "API Key",
+      "providerWarning": "Deleting this provider will also delete all associated API keys. This action cannot be undone.",
+      "keyWarning": "This action cannot be undone.",
+      "cancel": "Cancel",
+      "confirm": "Confirm Delete"
+    }
+  },
+  "emptyState": {
+    "title": "Welcome to Keeyper",
+    "subtitle": "Add your first provider or import existing data to get started",
+    "validKey": "Valid key",
+    "expiringSoon": "Expiring soon",
+    "expired": "Expired"
+  },
+  "settings": {
+    "title": "Security Settings",
+    "requireAuthToView": "Require authentication to view keys",
+    "requireAuthToViewDesc": "Require fingerprint or password to view keys",
+    "requireAuthToCopy": "Require authentication to copy keys",
+    "requireAuthToCopyDesc": "Require fingerprint or password to copy keys",
+    "passwordProtection": "Password Protection",
+    "passwordProtectionDesc": "After setting a password, all sensitive operations (view, copy, edit, delete keys) require password verification. The password only needs to be entered once within 10 minutes.",
+    "changePassword": "Setup/Change Password",
+    "changePasswordDesc": "Set or change your password",
+    "dataManagement": "Data Management",
+    "dataManagementDesc": "Export or import your providers and API keys",
+    "exportData": "Export Data",
+    "exportDataDesc": "Download all your data as a JSON file",
+    "importData": "Import Data",
+    "importDataDesc": "Restore data from a JSON file",
+    "exportSuccess": "Data exported successfully",
+    "importSuccess": "Data imported successfully",
+    "importError": "Failed to import data",
+    "invalidFile": "Invalid file format",
+    "importConfirm": "Import data will overwrite existing data with the same provider or key names. Continue?"
+  },
+  "auth": {
+    "title": "Authentication",
+    "unlock": "Unlock",
+    "authorizationRequired": "Authorization Required",
+    "authenticateToView": "Please authenticate to view the key",
+    "authenticateToCopy": "Please authenticate to copy the key",
+    "enterPasswordToView": "Enter password to view the key",
+    "enterPasswordToCopy": "Enter password to copy the key",
+    "enterPasswordToEdit": "Enter password to edit the key",
+    "enterPasswordToDelete": "Enter password to delete the key",
+    "enterPassword": "Enter password",
+    "biometricPrompt": "Authenticate with fingerprint or Face ID",
+    "passwordPrompt": "Enter password to continue",
+    "password": "Password",
+    "passwordPlaceholder": "Enter your password",
+    "passwordHint": "Password hint (optional)",
+    "passwordWarning": "Important: Since this is a standalone application, if you forget your password, you will not be able to view saved API Keys. Please keep your password safe.",
+    "invalidPassword": "Incorrect password",
+    "error": "Authentication failed, please try again",
+    "biometricNotAvailable": "Biometric authentication not available",
+    "biometricNotEnrolled": "No biometric authentication set up",
+    "setupPassword": "Setup Password",
+    "setupPasswordHint": "Set a password for authentication",
+    "setupPasswordFailed": "Setup failed",
+    "confirmPassword": "Confirm Password",
+    "passwordMismatch": "Passwords do not match",
+    "passwordRequired": "Password cannot be empty",
+    "passwordTooShort": "Password must be at least 6 characters",
+    "oldPasswordRequired": "Please enter your current password",
+    "oldPassword": "Current Password",
+    "newPassword": "New Password",
+    "enterOldAndNewPassword": "Enter your current password and new password",
+    "changePassword": "Change Password",
+    "changePasswordFailed": "Current password is incorrect or change failed"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "copy": "Copy",
+    "copied": "Copied",
+    "confirm": "Confirm",
+    "close": "Close",
+    "loading": "Loading...",
+    "note": "Note",
+    "expires": "Expires",
+    "optional": "Optional"
+  },
+  "keys": {
+    "unnamedKey": "Unnamed Key",
+    "modelsList": "Available Models",
+    "noModels": "No models data",
+    "viewModels": "View models list",
+    "lastUpdated": "Last updated",
+    "modelProvider": "Provider",
+    "modelDomain": "Domain",
+    "modelVersion": "Version",
+    "modelTaskType": "Task Type",
+    "modelInput": "Input",
+    "modelOutput": "Output",
+    "modelTokenLimits": "Token Limits",
+    "modelContextWindow": "Context",
+    "modelMaxInput": "Max Input",
+    "modelMaxOutput": "Max Output",
+    "modelMaxReasoning": "Max Reasoning"
+  }
+}

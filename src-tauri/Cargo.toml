@@ -1,0 +1,33 @@
+[package]
+name = "keykeeper"
+version = "1.0.0"
+description = "跨平台大模型 API Key 管理工具"
+authors = ["KeyKeeper"]
+license = "MIT"
+repository = "https://github.com/yourusername/keykeeper"
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "keykeeper_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-http = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
+dirs = "5.0"
+reqwest = { version = "0.12", features = ["json", "native-tls"] }
+rfd = "0.15"
+tokio = { version = "1", features = ["full"] }

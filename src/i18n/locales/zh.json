@@ -1,0 +1,171 @@
+{
+  "app": {
+    "name": "Keeyper",
+    "description": "API Key 管理工具"
+  },
+  "sidebar": {
+    "addProvider": "添加提供方",
+    "noProviders": "暂无提供方",
+    "noProvidersHint": "点击上方按钮添加",
+    "totalProviders": "共 {{count}} 个提供方",
+    "keyCount": "{{count}} 个密钥"
+  },
+  "mainContent": {
+    "totalKeys": "密钥总数",
+    "valid": "有效",
+    "expired": "已过期",
+    "noKeys": "暂无密钥",
+    "noKeysHint": "点击右上角按钮添加 API 密钥",
+    "addKey": "添加密钥"
+  },
+  "keyStatus": {
+    "valid": "有效",
+    "expired": "已过期",
+    "expiringSoon": "今天过期",
+    "expiringDays": "{{days}} 天后过期",
+    "neverExpires": "永不过期",
+    "expiredDate": "已过期"
+  },
+  "modals": {
+    "addProvider": {
+      "title": "添加提供方",
+      "providerName": "提供方名称",
+      "providerNamePlaceholder": "例如: OpenAI",
+      "baseUrl": "提供方地址",
+      "baseUrlPlaceholder": "https://api.openai.com",
+      "cancel": "取消",
+      "submit": "添加",
+      "error": {
+        "requiredName": "请输入提供方名称",
+        "requiredUrl": "请输入提供方地址",
+        "invalidUrl": "请输入有效的 URL 地址"
+      }
+    },
+    "addKey": {
+      "title": "添加 API 密钥",
+      "key": "API Key",
+      "keyPlaceholder": "sk-...",
+      "name": "名称（可选）",
+      "namePlaceholder": "例如: GPT-4 密钥",
+      "note": "备注（可选）",
+      "notePlaceholder": "添加一些备注...",
+      "expiresAt": "过期时间",
+      "neverExpires": "永不过期",
+      "cancel": "取消",
+      "submit": "添加",
+      "error": {
+        "requiredKey": "请输入 API Key",
+        "noProvider": "未选择提供方"
+      }
+    },
+    "editKey": {
+      "title": "编辑 API 密钥",
+      "save": "保存"
+    },
+    "deleteConfirm": {
+      "title": "确认删除",
+      "provider": "提供方",
+      "apiKey": "API 密钥",
+      "providerWarning": "删除提供方后，该提供方下的所有 API 密钥也将被删除。此操作无法撤销。",
+      "keyWarning": "删除后无法恢复。",
+      "cancel": "取消",
+      "confirm": "确认删除"
+    }
+  },
+  "emptyState": {
+    "title": "欢迎使用 Keeyper",
+    "subtitle": "添加你的第一个提供方，或导入已有数据开始使用",
+    "validKey": "有效密钥",
+    "expiringSoon": "即将过期",
+    "expired": "已过期"
+  },
+  "settings": {
+    "title": "安全设置",
+    "requireAuthToView": "查看密钥需要认证",
+    "requireAuthToViewDesc": "启用后需要指纹或密码才能查看密钥",
+    "requireAuthToCopy": "复制密钥需要认证",
+    "requireAuthToCopyDesc": "启用后需要指纹或密码才能复制密钥",
+    "passwordProtection": "密码保护",
+    "passwordProtectionDesc": "设置密码后，所有敏感操作（查看、复制、编辑、删除密钥）都需要密码验证。密码在 10 分钟内只需输入一次。",
+    "changePassword": "设置/修改密码",
+    "changePasswordDesc": "设置或修改您的密码",
+    "dataManagement": "数据管理",
+    "dataManagementDesc": "导出或导入您的提供方和 API 密钥",
+    "exportData": "导出数据",
+    "exportDataDesc": "将所有数据下载为 JSON 文件",
+    "importData": "导入数据",
+    "importDataDesc": "从 JSON 文件恢复数据",
+    "exportSuccess": "数据导出成功",
+    "importSuccess": "数据导入成功",
+    "importError": "导入数据失败",
+    "invalidFile": "无效的文件格式",
+    "importConfirm": "导入数据将会覆盖同名的提供方或密钥，是否继续？"
+  },
+  "auth": {
+    "title": "身份验证",
+    "unlock": "解锁",
+    "authorizationRequired": "需要授权",
+    "authenticateToView": "请验证身份以查看密钥",
+    "authenticateToCopy": "请验证身份以复制密钥",
+    "enterPasswordToView": "请输入密码以查看密钥",
+    "enterPasswordToCopy": "请输入密码以复制密钥",
+    "enterPasswordToEdit": "请输入密码以编辑密钥",
+    "enterPasswordToDelete": "请输入密码以删除密钥",
+    "enterPassword": "请输入密码",
+    "biometricPrompt": "使用指纹或面容 ID 验证",
+    "passwordPrompt": "输入密码以继续",
+    "password": "密码",
+    "passwordPlaceholder": "请输入密码",
+    "passwordHint": "密码提示词（可选）",
+    "passwordWarning": "重要提示：由于是单机程序，如果忘记密码，您将无法从本应用中查看已保存的 API Key。请妥善保管您的密码。",
+    "invalidPassword": "密码错误",
+    "error": "验证失败，请重试",
+    "biometricNotAvailable": "生物识别不可用",
+    "biometricNotEnrolled": "未设置生物识别",
+    "setupPassword": "设置密码",
+    "setupPasswordHint": "设置密码后，所有敏感操作都需要密码验证",
+    "setupPasswordFailed": "设置失败",
+    "confirmPassword": "确认密码",
+    "passwordMismatch": "两次输入的密码不一致",
+    "passwordRequired": "密码不能为空",
+    "passwordTooShort": "密码长度至少为6位",
+    "oldPasswordRequired": "请输入原密码",
+    "oldPassword": "原密码",
+    "newPassword": "新密码",
+    "enterOldAndNewPassword": "请输入原密码和新密码",
+    "changePassword": "修改密码",
+    "changePasswordFailed": "原密码错误或修改失败"
+  },
+  "common": {
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "copy": "复制",
+    "copied": "已复制",
+    "confirm": "确认",
+    "close": "关闭",
+    "loading": "加载中...",
+    "note": "备注",
+    "expires": "过期",
+    "optional": "可选"
+  },
+  "keys": {
+    "unnamedKey": "未命名密钥",
+    "modelsList": "可用模型列表",
+    "noModels": "暂无模型数据",
+    "viewModels": "查看模型列表",
+    "lastUpdated": "最后更新",
+    "modelProvider": "提供商",
+    "modelDomain": "领域",
+    "modelVersion": "版本",
+    "modelTaskType": "任务类型",
+    "modelInput": "输入模态",
+    "modelOutput": "输出模态",
+    "modelTokenLimits": "Token 限制",
+    "modelContextWindow": "上下文窗口",
+    "modelMaxInput": "最大输入",
+    "modelMaxOutput": "最大输出",
+    "modelMaxReasoning": "最大推理"
+  }
+}
