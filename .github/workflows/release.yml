@@ -8,6 +8,8 @@ jobs:
   build-release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 
     permissions:
       contents: write
