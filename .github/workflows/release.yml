@@ -32,6 +32,7 @@ jobs:
       - name: Build and attach release
         uses: tauri-apps/tauri-action@v0.5
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_PRIVATE_KEY: ""
           TAURI_KEY_PASSWORD: ""
         with:
