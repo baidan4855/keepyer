@@ -1,131 +1,133 @@
 # KeyKeeper
 
-跨平台大模型 API Key 管理工具 - 一个简单精致的桌面应用，用于管理各种 AI 提供方的 API 密钥。
+A cross-platform LLM API key manager — a clean, lightweight desktop app for managing API keys from different AI providers.
 
-## 功能特性
+> 中文说明请见 `README.zh-CN.md`。
 
-- **提供方管理**: 添加、编辑、删除不同的 AI 提供方（如 OpenAI、Anthropic 等）
-- **密钥管理**: 为每个提供方添加多个 API 密钥
-- **过期追踪**: 为密钥设置过期时间，自动标记已过期密钥
-- **快捷复制**: 一键复制提供方地址和 API 密钥
-- **本地存储**: 所有数据存储在本地，不上传到云端
-- **跨平台**: 支持 Windows、macOS 和 Linux
-- **轻量级**: 使用 Tauri 构建，应用体积仅约 10MB
+## Features
 
-## 开发环境设置
+- **Provider management**: Add, edit, and delete AI providers (e.g. OpenAI, Anthropic)
+- **Key management**: Add multiple API keys per provider
+- **Expiry tracking**: Set expiration dates and automatically mark expired keys
+- **Quick copy**: One-click copy provider base URL and API keys
+- **Local storage**: All data stays on device, nothing is uploaded
+- **Cross-platform**: Windows, macOS, and Linux
+- **Lightweight**: Built with Tauri, around 10MB
 
-### 前置要求
+## Development Setup
+
+### Prerequisites
 
 - Node.js 18+
 - npm
-- Rust 1.88+ (用于构建 Tauri)
+- Rust 1.88+ (for building Tauri)
 
-#### 安装 Rust
+#### Install Rust
 
 ```bash
 # macOS
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Windows
-# 下载并运行 https://rustup.rs/
+# Download and run https://rustup.rs/
 
 # Linux
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-### 安装依赖
+### Install Dependencies
 
 ```bash
 npm install
 ```
 
-### 开发模式
+### Development Mode
 
 ```bash
-# 启动 Tauri 开发模式 (会自动启动 Vite)
+# Start Tauri dev mode (will also start Vite)
 npm run tauri:dev
 ```
 
-### 构建应用
+### Build
 
 ```bash
-# 构建当前平台
+# Build for current platform
 npm run tauri:build
 
-# 调试构建 (更快)
+# Debug build (faster)
 npm run tauri:build:debug
 ```
 
-构建产物会输出到 `src-tauri/target/release/bundle/` 目录。
+Build outputs are generated at `src-tauri/target/release/bundle/`.
 
-## 项目结构
+## Project Structure
 
 ```
 src/
-  app/                 应用入口与布局
-  domains/             按领域划分的功能模块
-    providers/         提供方管理
-    keys/              API Key 管理
-    settings/          安全与设置
-  shared/              共享组件与工具
-  i18n/                多语言资源
-  types/               全局类型定义
+  app/                 App entry and layout
+  domains/             Domain modules
+    providers/         Provider management
+    keys/              API Key management
+    settings/          Security and settings
+  shared/              Shared components and utilities
+  i18n/                Localization resources
+  types/               Global type definitions
 ```
 
-## 使用说明
+## Usage
 
-### 添加提供方
+### Add a Provider
 
-1. 点击左侧边栏的「添加提供方」按钮
-2. 输入提供方名称（如 "OpenAI"）
-3. 输入提供方地址（如 "https://api.openai.com"）
+1. Click the "Add Provider" button in the left sidebar
+2. Enter the provider name (e.g. "OpenAI")
+3. Enter the provider base URL (e.g. "https://api.openai.com")
 
-### 添加 API 密钥
+### Add an API Key
 
-1. 选择一个提供方
-2. 点击右上角的「添加密钥」按钮
-3. 输入 API 密钥（必填）
-4. 可选：添加名称、备注和过期时间
+1. Select a provider
+2. Click the "Add Key" button in the top-right corner
+3. Enter the API key (required)
+4. Optional: add a name, note, and expiration date
 
-### 密钥状态
+### Key Status
 
-- 🟢 绿色：密钥有效
-- 🟡 黄色：密钥即将过期（7天内）
-- 🔴 红色：密钥已过期
+- 🟢 Green: Key is valid
+- 🟡 Yellow: Key expires soon (within 7 days)
+- 🔴 Red: Key has expired
 
-## 技术栈
+## Tech Stack
 
-- **Tauri 2.0**: 轻量级跨平台桌面应用框架
-- **React**: UI 框架
-- **Vite**: 构建工具
-- **Tailwind CSS**: 样式框架
-- **Zustand**: 状态管理
-- **TypeScript**: 类型安全
-- **Rust**: 后端逻辑
+- **Tauri 2.0**: Lightweight cross-platform desktop framework
+- **React**: UI framework
+- **Vite**: Build tool
+- **Tailwind CSS**: Styling
+- **Zustand**: State management
+- **TypeScript**: Type safety
+- **Rust**: Backend logic
 
-## 设计风格
+## Design Style
 
-应用采用 Soft UI (New Soft UI) 设计风格，具有：
+The app uses a Soft UI (New Soft UI) visual style featuring:
 
-- 柔和的阴影和圆角
-- 紫色主题配色
-- 毛玻璃效果
-- 平滑的过渡动画
-- 优秀的可访问性
+- Soft shadows and rounded corners
+- Purple-themed palette
+- Frosted glass effects
+- Smooth transitions
+- Strong accessibility
 
-## 为什么选择 Tauri？
+## Why Tauri?
 
-相比 Electron，Tauri 具有以下优势：
+Compared to Electron, Tauri offers:
 
-- **更小的体积**: 约 10MB vs Electron 的 150MB+
-- **更少的内存占用**: 使用系统 WebView
-- **更好的安全性**: Rust 内存安全保证
-- **更快的启动速度**: 更轻量的运行时
+- **Smaller size**: ~10MB vs Electron’s 150MB+
+- **Lower memory usage**: Uses the system WebView
+- **Better security**: Rust memory safety
+- **Faster startup**: Lighter runtime
 
-## 许可证
+## License
 
-MIT License，详见 `LICENSE`。
+MIT License. See `LICENSE`.
 
-## 贡献
+## Contributing
 
-欢迎提交 Issue 或 PR。请先阅读 `CONTRIBUTING.md`。
+Issues and PRs are welcome. Please read `CONTRIBUTING.md` first.
