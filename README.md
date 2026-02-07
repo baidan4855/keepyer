@@ -60,6 +60,15 @@ npm run tauri:build:debug
 
 Build outputs are generated at `src-tauri/target/release/bundle/`.
 
+### Linux builds
+
+Automated releases only produce
+macOS and Windows binaries, so Linux users must build locally if they need a native release.
+
+1. Install the system dependencies listed under `src-tauri/tauri.conf.json` and the workflow (glib, GTK, WebKit2GTK, etc.).
+2. Run `npm ci` followed by `npm run tauri:build`.
+3. Grab the bundle from `src-tauri/target/release/bundle/`.
+
 ## Project Structure
 
 ```
