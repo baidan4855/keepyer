@@ -6,10 +6,12 @@ on:
 
 jobs:
   build-release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
 
     permissions:
       contents: write
@@ -24,37 +26,16 @@ jobs:
           node-version: 18
           cache: npm
 
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
-
-      - name: Install Linux system deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libglib2.0-dev \
-            pkg-config \
-            patchelf
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Tauri release bundle
-        run: npm run tauri:build
-
-      - name: Package release assets
-        run: |
-          zip -qr "keeyper-bundle-${{ runner.os }}.zip" src-tauri/target/release/bundle
-
-      - name: Attach asset to release
-        uses: softprops/action-gh-release@v1
+      - name: Build and attach release
+        uses: tauri-apps/tauri-action@v0.5
+        env:
+          TAURI_PRIVATE_KEY: ""
+          TAURI_KEY_PASSWORD: ""
         with:
-          files: keeyper-bundle-${{ runner.os }}.zip
+          releaseId: ${{ github.event.release.id }}
+          distPath: dist
+          args: >
+            --verbose
