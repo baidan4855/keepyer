@@ -9,6 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,10 +39,7 @@ jobs:
         run: |
           zip -qr "keeyper-bundle-${{ runner.os }}.zip" src-tauri/target/release/bundle
 
-      - name: Upload release asset
-        uses: actions/upload-release-asset@v1
+      - name: Attach asset to release
+        uses: softprops/action-gh-release@v1
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: keeyper-bundle-${{ runner.os }}.zip
-          asset_name: keeyper-bundle-${{ runner.os }}.zip
-          asset_content_type: application/zip
+          files: keeyper-bundle-${{ runner.os }}.zip
