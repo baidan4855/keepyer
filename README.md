@@ -14,6 +14,15 @@ A cross-platform LLM API key manager — a clean, lightweight desktop app for ma
 - **Cross-platform**: Windows, macOS, and Linux
 - **Lightweight**: Built with Tauri, around 10MB
 
+## Screenshots
+
+Below are two key views of the app so you can quickly understand the workflow.
+
+![Main Page](assets/main_page.png)
+The main dashboard shows providers, keys, and their status at a glance.
+![Model List](assets/model_list.png)
+The model list helps you review and manage model availability per key/provider.
+
 ## Development Setup
 
 ### Prerequisites
