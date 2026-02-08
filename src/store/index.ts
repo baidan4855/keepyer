@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import type {
   Provider,
   ApiKey,
@@ -61,6 +61,17 @@ interface StoreActions {
 }
 
 type AppStore = AppState & StoreActions;
+
+function dateReviver(key: string, value: unknown): unknown {
+  const dateFields = ['createdAt', 'updatedAt', 'expiresAt'];
+  if (dateFields.includes(key) && (typeof value === 'string' || typeof value === 'number')) {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) {
+      return date;
+    }
+  }
+  return value;
+}
 
 const initialState: AppState = {
   providers: [],
@@ -242,6 +253,9 @@ export const useStore = create<AppStore>()(
     {
       name: 'keykeeper-storage',
       version: 2,
+      storage: createJSONStorage(() => localStorage, {
+        reviver: dateReviver,
+      }),
       migrate: (persistedState) => {
         if (!persistedState || typeof persistedState !== 'object') {
           return persistedState as AppState;

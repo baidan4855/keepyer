@@ -5,6 +5,17 @@
 import { ApiKey, ApiKeyWithStatus, KeyStatus, Provider, ProviderWithKeys } from '@/types';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 
+function toTime(value: unknown): number {
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    const time = new Date(value).getTime();
+    return Number.isNaN(time) ? 0 : time;
+  }
+  return 0;
+}
+
 /**
  * 生成唯一 ID
  */
@@ -66,7 +77,7 @@ export function buildProviderWithKeys(
       // 优先显示有效的密钥，然后按创建时间排序
       if (a.status === 'valid' && b.status !== 'valid') return -1;
       if (a.status !== 'valid' && b.status === 'valid') return 1;
-      return b.createdAt.getTime() - a.createdAt.getTime();
+      return toTime(b.createdAt) - toTime(a.createdAt);
     });
 
   const validCount = providerKeys.filter((k) => k.status === 'valid' || k.status === 'expiring-soon').length;

@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 
 export default defineConfig({
+  // 在 Tauri 的 file:// 协议下使用相对路径，避免生产环境白屏
+  base: process.env.TAURI_PLATFORM ? './' : '/',
   plugins: [react()],
   resolve: {
     alias: {
