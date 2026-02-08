@@ -3,8 +3,8 @@
  */
 
 const STORAGE_KEYS = {
-  PROVIDERS: 'keykeeper_providers',
-  API_KEYS: 'keykeeper_api_keys',
+  PROVIDERS: 'keeyper_providers',
+  API_KEYS: 'keeyper_api_keys',
 };
 
 /**

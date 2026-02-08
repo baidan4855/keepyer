@@ -97,6 +97,8 @@ const initialState: AppState = {
   lastAuthTime: null,
 };
 
+const PERSIST_STORAGE_KEY = 'keeyper-storage';
+
 export const useStore = create<AppStore>()(
   persist(
     (set, get) => ({
@@ -251,7 +253,7 @@ export const useStore = create<AppStore>()(
       },
     }),
     {
-      name: 'keykeeper-storage',
+      name: PERSIST_STORAGE_KEY,
       version: 2,
       storage: createJSONStorage(() => localStorage, {
         reviver: dateReviver,

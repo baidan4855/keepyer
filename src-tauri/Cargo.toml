@@ -1,17 +1,17 @@
 [package]
-name = "keykeeper"
+name = "keeyper"
 version = "1.0.0"
 description = "跨平台大模型 API Key 管理工具"
-authors = ["KeyKeeper"]
+authors = ["Keeyper"]
 license = "MIT"
-repository = "https://github.com/yourusername/keykeeper"
+repository = "https://github.com/yourusername/keeyper"
 edition = "2021"
 rust-version = "1.77.2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "keykeeper_lib"
+name = "keeyper_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

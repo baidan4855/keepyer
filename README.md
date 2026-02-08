@@ -1,4 +1,4 @@
-# KeyKeeper
+# Keeyper
 
 A cross-platform LLM API key manager — a clean, lightweight desktop app for managing API keys from different AI providers.
 

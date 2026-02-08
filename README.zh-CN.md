@@ -1,4 +1,4 @@
-# KeyKeeper
+# Keeyper
 
 跨平台大模型 API Key 管理工具 - 一个简单精致的桌面应用，用于管理各种 AI 提供方的 API 密钥。
 
