@@ -12,6 +12,7 @@ import type {
   AddKeyForm,
   SecuritySettings,
   ApiModel,
+  ModelTestResult,
 } from '@/types';
 import {
   generateId,
@@ -58,6 +59,11 @@ interface StoreActions {
   getProvidersWithKeys: () => ReturnType<typeof buildProviderWithKeys>[];
   getSelectedProvider: () => ReturnType<typeof buildProviderWithKeys> | null;
   getKeyById: (id: string) => ApiKey | undefined;
+
+  // 模型测试
+  setModelTestResult: (keyId: string, modelId: string, result: ModelTestResult) => void;
+  clearModelTestResults: (keyId?: string) => void;
+  getModelTestResult: (keyId: string, modelId: string) => ModelTestResult | undefined;
 }
 
 type AppStore = AppState & StoreActions;
@@ -95,6 +101,7 @@ const initialState: AppState = {
   authAction: null,
   pendingAuthKeyId: null,
   lastAuthTime: null,
+  modelTestResults: {},
 };
 
 const PERSIST_STORAGE_KEY = 'keeyper-storage';
@@ -245,6 +252,44 @@ export const useStore = create<AppStore>()(
       getKeyById: (id) => {
         const state = get();
         return state.apiKeys.find((k) => k.id === id);
+      },
+
+      // 模型测试
+      setModelTestResult: (keyId, modelId, result) => {
+        const resultKey = `${keyId}:${modelId}`;
+        set((state) => ({
+          modelTestResults: {
+            ...state.modelTestResults,
+            [resultKey]: {
+              ...result,
+              timestamp: Date.now(),
+            },
+          },
+        }));
+      },
+
+      clearModelTestResults: (keyId) => {
+        if (keyId) {
+          // 清除指定 key 的所有测试结果
+          set((state) => {
+            const newResults: Record<string, ModelTestResult> = {};
+            Object.entries(state.modelTestResults).forEach(([k, v]) => {
+              if (!k.startsWith(`${keyId}:`)) {
+                newResults[k] = v;
+              }
+            });
+            return { modelTestResults: newResults };
+          });
+        } else {
+          // 清除所有测试结果
+          set({ modelTestResults: {} });
+        }
+      },
+
+      getModelTestResult: (keyId, modelId) => {
+        const state = get();
+        const resultKey = `${keyId}:${modelId}`;
+        return state.modelTestResults[resultKey];
       },
 
       // 批量导入数据

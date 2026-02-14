@@ -99,6 +99,26 @@ export interface SecuritySettings {
 }
 
 /**
+ * 模型测试结果
+ */
+export interface ModelTestResult {
+  status: 'idle' | 'loading' | 'success' | 'error';
+  message?: string;
+  response?: string;
+  error?: string;
+  timestamp?: number;
+}
+
+/**
+ * 进行中的测试任务
+ */
+export interface PendingModelTest {
+  keyId: string;
+  modelId: string;
+  abortController: AbortController;
+}
+
+/**
  * 应用状态
  */
 export interface AppState {
@@ -120,4 +140,5 @@ export interface AppState {
   authAction: 'view' | 'copy' | 'edit' | 'delete' | null;
   pendingAuthKeyId: string | null;
   lastAuthTime: number | null;
+  modelTestResults: Record<string, ModelTestResult>;
 }

@@ -185,9 +185,13 @@
     "searchModels": "Search models by name...",
     "noSearchResults": "No models found matching your search",
     "clearSearch": "Clear search",
+    "clearAll": "Clear All",
+    "clearAllResults": "Clear all test results",
     "testModel": "Test model",
     "test": "Test",
-    "testing": "Testing..."
+    "testing": "Testing...",
+    "cancel": "Cancel",
+    "cancelTest": "Cancel test"
   },
   "apiTest": {
     "validKey": "API Key Valid",
@@ -205,6 +209,8 @@
     "modelTestSuccess": "Model test successful",
     "modelTestFailed": "Model test failed",
     "rateLimited": "Rate limited",
-    "rateLimitedDesc": "Please try again later"
+    "rateLimitedDesc": "Please try again later",
+    "testCancelled": "Test cancelled",
+    "testCancelledDesc": "User cancelled the test"
   }
 }

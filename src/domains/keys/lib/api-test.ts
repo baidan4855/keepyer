@@ -275,17 +275,25 @@ export async function testModel(
   provider: Provider,
   apiKey: string,
   modelId: string,
-  message: string = '你是什么模型'
+  message: string = '你是什么模型',
+  signal?: AbortSignal
 ): Promise<ModelTestResult> {
   const apiType = provider.apiType || 'openai';
 
   try {
     if (apiType === 'claude') {
-      return await testClaudeModel(provider, apiKey, modelId, message);
+      return await testClaudeModel(provider, apiKey, modelId, message, signal);
     } else {
-      return await testOpenAIModel(provider, apiKey, modelId, message);
+      return await testOpenAIModel(provider, apiKey, modelId, message, signal);
     }
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return {
+        status: 'error',
+        message: t('apiTest.testCancelled'),
+        error: t('apiTest.testCancelledDesc'),
+      };
+    }
     return {
       status: 'error',
       message: t('apiTest.modelTestFailed'),
@@ -301,9 +309,15 @@ async function testOpenAIModel(
   provider: Provider,
   apiKey: string,
   modelId: string,
-  message: string
+  message: string,
+  signal?: AbortSignal
 ): Promise<ModelTestResult> {
   const url = smartJoinUrl(provider.baseUrl, '/v1/chat/completions');
+
+  // 检查是否已取消
+  if (signal?.aborted) {
+    throw new Error('AbortError');
+  }
 
   const response = await httpRequest({
     url,

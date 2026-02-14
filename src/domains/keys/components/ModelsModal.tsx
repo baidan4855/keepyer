@@ -6,10 +6,13 @@
 import { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useStore } from '@/store';
-import { X, Search, Play, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { X, Search, Play, Loader2, CheckCircle2, XCircle, Square } from 'lucide-react';
 import { testModel, type ModelTestResult } from '@/domains/keys/lib/api-test';
 import { decryptApiKey } from '@/domains/settings/lib/secure-storage';
 import type { ApiModel } from '@/types';
+
+// 测试结果存储键前缀
+const getTestResultKey = (keyId: string, modelId: string) => `${keyId}:${modelId}`;
 
 // 格式化 token 数量为可读格式
 function formatTokens(tokens?: number): string {
@@ -27,10 +30,19 @@ function joinArray(arr?: string[]): string {
 
 export default function ModelsModal() {
   const { t, i18n } = useTranslation();
-  const { isModelsModalOpen, modelsModalKeyId, getKeyById, setModelsModalOpen, providers } = useStore();
+  const {
+    isModelsModalOpen,
+    modelsModalKeyId,
+    getKeyById,
+    setModelsModalOpen,
+    providers,
+    modelTestResults,
+    setModelTestResult,
+    clearModelTestResults,
+  } = useStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [testingModelIds, setTestingModelIds] = useState<Set<string>>(new Set());
-  const [testResults, setTestResults] = useState<Record<string, ModelTestResult>>({});
+  const abortControllersRef = useMemo(() => new Map<string, AbortController>(), []);
 
   const key = modelsModalKeyId ? getKeyById(modelsModalKeyId) : null;
   const models = key?.models || [];
@@ -51,10 +63,18 @@ export default function ModelsModal() {
     );
   }, [models, searchQuery]);
 
+  // 获取当前 key 的测试结果
+  const getCurrentTestResult = (modelId: string): ModelTestResult | undefined => {
+    if (!key) return undefined;
+    return modelTestResults[getTestResultKey(key.id, modelId)];
+  };
+
   const handleClose = () => {
+    // 取消所有进行中的测试
+    abortControllersRef.forEach(controller => controller.abort());
+    abortControllersRef.clear();
     setModelsModalOpen(false, null);
     setSearchQuery('');
-    setTestResults({});
     setTestingModelIds(new Set());
   };
 
@@ -62,11 +82,12 @@ export default function ModelsModal() {
   const handleTestModel = async (model: ApiModel) => {
     if (!key || !provider) return;
 
+    const resultKey = getTestResultKey(key.id, model.id);
+    const abortController = new AbortController();
+    abortControllersRef.set(model.id, abortController);
+
     setTestingModelIds(prev => new Set(prev).add(model.id));
-    setTestResults(prev => ({
-      ...prev,
-      [model.id]: { status: 'loading' }
-    }));
+    setModelTestResult(key.id, model.id, { status: 'loading' });
 
     try {
       // 解密 API Key
@@ -76,28 +97,38 @@ export default function ModelsModal() {
       const testMessage = i18n.language?.startsWith('zh') ? '你是什么模型' : 'What model are you';
 
       // 发送测试请求
-      const result = await testModel(provider, decryptedKey, model.id, testMessage);
+      const result = await testModel(provider, decryptedKey, model.id, testMessage, abortController.signal);
 
-      setTestResults(prev => ({
-        ...prev,
-        [model.id]: result
-      }));
+      setModelTestResult(key.id, model.id, result);
     } catch (error) {
-      setTestResults(prev => ({
-        ...prev,
-        [model.id]: {
-          status: 'error',
-          message: t('apiTest.modelTestFailed'),
-          error: error instanceof Error ? error.message : String(error)
-        }
-      }));
+      setModelTestResult(key.id, model.id, {
+        status: 'error',
+        message: t('apiTest.modelTestFailed'),
+        error: error instanceof Error ? error.message : String(error)
+      });
     } finally {
+      abortControllersRef.delete(model.id);
       setTestingModelIds(prev => {
         const newSet = new Set(prev);
         newSet.delete(model.id);
         return newSet;
       });
     }
+  };
+
+  // 取消测试
+  const handleCancelTest = (modelId: string) => {
+    const controller = abortControllersRef.get(modelId);
+    if (controller) {
+      controller.abort();
+      abortControllersRef.delete(modelId);
+    }
+  };
+
+  // 清除当前 key 的所有测试结果
+  const handleClearAllResults = () => {
+    if (!key) return;
+    clearModelTestResults(key.id);
   };
 
   if (!isModelsModalOpen || !key) return null;
@@ -124,13 +155,25 @@ export default function ModelsModal() {
                   {models.length} {models.length === 1 ? 'model' : 'models'} available
                 </p>
               </div>
-              <button
-                onClick={handleClose}
-                className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all duration-200 cursor-pointer"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {/* 清除所有测试结果按钮 */}
+                {key && Object.keys(modelTestResults).some(k => k.startsWith(`${key.id}:`)) && (
+                  <button
+                    onClick={handleClearAllResults}
+                    className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-all duration-200"
+                    title={t('keys.clearAllResults') || 'Clear all test results'}
+                  >
+                    {t('keys.clearAll') || 'Clear All'}
+                  </button>
+                )}
+                <button
+                  onClick={handleClose}
+                  className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all duration-200 cursor-pointer"
+                  aria-label="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -192,60 +235,72 @@ export default function ModelsModal() {
                               {model.id}
                             </p>
                           </div>
-                          <button
-                            onClick={() => handleTestModel(model)}
-                            disabled={testingModelIds.has(model.id)}
-                            className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
-                              bg-primary-50 text-primary-700 hover:bg-primary-100 border border-primary-200
-                              disabled:bg-slate-100 disabled:text-slate-400"
-                            title={t('keys.testModel') || 'Test model'}
-                          >
+                          <div className="shrink-0 flex items-center gap-2">
+                            {/* 测试/取消按钮 */}
                             {testingModelIds.has(model.id) ? (
-                              <>
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                <span>{t('keys.testing') || 'Testing...'}</span>
-                              </>
+                              <button
+                                onClick={() => handleCancelTest(model.id)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
+                                  bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200"
+                                title={t('keys.cancelTest') || 'Cancel test'}
+                              >
+                                <Square className="w-3.5 h-3.5 fill-current" />
+                                <span>{t('keys.cancel') || 'Cancel'}</span>
+                              </button>
                             ) : (
-                              <>
+                              <button
+                                onClick={() => handleTestModel(model)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
+                                  bg-primary-50 text-primary-700 hover:bg-primary-100 border border-primary-200"
+                                title={t('keys.testModel') || 'Test model'}
+                              >
                                 <Play className="w-3.5 h-3.5" />
                                 <span>{t('keys.test') || 'Test'}</span>
-                              </>
+                              </button>
                             )}
-                          </button>
+                          </div>
                         </div>
                       </div>
 
-                      {/* 测试结果 */}
-                      {testResults[model.id] && testResults[model.id].status !== 'loading' && (
+                      {/* 测试结果 - 从 store 获取持久化结果 */}
+                      {(() => {
+                        const result = getCurrentTestResult(model.id);
+                        if (!result || result.status === 'loading') return null;
+                        return (
                         <div className={`mb-4 p-3 rounded-lg text-sm ${
-                          testResults[model.id].status === 'success'
+                          result.status === 'success'
                             ? 'bg-green-50 border border-green-200 text-green-800'
                             : 'bg-red-50 border border-red-200 text-red-800'
                         }`}>
                           <div className="flex items-start gap-2">
-                            {testResults[model.id].status === 'success' ? (
+                            {result.status === 'success' ? (
                               <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0 text-green-600" />
                             ) : (
                               <XCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-600" />
                             )}
                             <div className="flex-1 min-w-0">
                               <p className="font-medium mb-1">
-                                {testResults[model.id].message}
+                                {result.message}
                               </p>
-                              {testResults[model.id].response && (
+                              {result.response && (
                                 <div className="mt-2 p-2 bg-white/60 rounded text-slate-700 whitespace-pre-wrap break-words">
-                                  {testResults[model.id].response}
+                                  {result.response}
                                 </div>
                               )}
-                              {testResults[model.id].error && (
+                              {result.error && (
                                 <p className="text-red-700/80 text-xs mt-1">
-                                  {testResults[model.id].error}
+                                  {result.error}
+                                </p>
+                              )}
+                              {result.timestamp && (
+                                <p className="text-xs text-slate-400 mt-2">
+                                  {new Date(result.timestamp).toLocaleString()}
                                 </p>
                               )}
                             </div>
                           </div>
                         </div>
-                      )}
+                      )})()}
 
                       {/* 基本信息区域 */}
                       <div className="mb-4">

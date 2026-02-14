@@ -185,9 +185,13 @@
     "searchModels": "搜索模型名称...",
     "noSearchResults": "未找到匹配的模型",
     "clearSearch": "清除搜索",
+    "clearAll": "清除全部",
+    "clearAllResults": "清除所有测试结果",
     "testModel": "测试模型",
     "test": "测试",
-    "testing": "测试中..."
+    "testing": "测试中...",
+    "cancel": "取消",
+    "cancelTest": "取消测试"
   },
   "apiTest": {
     "validKey": "API Key 有效",
@@ -205,6 +209,8 @@
     "modelTestSuccess": "模型测试成功",
     "modelTestFailed": "模型测试失败",
     "rateLimited": "请求过于频繁",
-    "rateLimitedDesc": "请稍后再试"
+    "rateLimitedDesc": "请稍后再试",
+    "testCancelled": "测试已取消",
+    "testCancelledDesc": "用户取消了测试"
   }
 }
