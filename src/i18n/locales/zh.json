@@ -181,7 +181,12 @@
     "modelContextWindow": "上下文窗口",
     "modelMaxInput": "最大输入",
     "modelMaxOutput": "最大输出",
-    "modelMaxReasoning": "最大推理"
+    "modelMaxReasoning": "最大推理",
+    "searchModels": "搜索模型名称...",
+    "noSearchResults": "未找到匹配的模型",
+    "testModel": "测试模型",
+    "test": "测试",
+    "testing": "测试中..."
   },
   "apiTest": {
     "validKey": "API Key 有效",
@@ -195,6 +200,10 @@
     "providerUnreachable": "提供方不可达",
     "keyMaybeInvalid": "API Key 可能无效",
     "providerHealthy": "提供方响应正常",
-    "unableConnect": "无法连接到服务器"
+    "unableConnect": "无法连接到服务器",
+    "modelTestSuccess": "模型测试成功",
+    "modelTestFailed": "模型测试失败",
+    "rateLimited": "请求过于频繁",
+    "rateLimitedDesc": "请稍后再试"
   }
 }

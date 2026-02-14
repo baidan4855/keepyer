@@ -3,13 +3,23 @@
  */
 
 import { httpRequest } from '@/domains/settings/lib/secure-storage';
-import type { ApiModel } from '@/types';
+import type { ApiModel, Provider } from '@/types';
 import i18n from '@/i18n';
 
 const t = (key: string, options?: Record<string, any>) => i18n.t(key, options) as string;
 
 export type ApiTestStatus = 'idle' | 'loading' | 'success' | 'error';
 export type ApiTestType = 'openai' | 'claude' | 'generic';
+
+/**
+ * 模型测试结果
+ */
+export interface ModelTestResult {
+  status: 'idle' | 'loading' | 'success' | 'error';
+  message?: string;
+  response?: string;
+  error?: string;
+}
 
 export interface ApiTestResult {
   status: ApiTestStatus;
@@ -254,5 +264,164 @@ export async function testApiKey(
       return testGenericApi(baseUrl, apiKey);
     default:
       return testOpenAIKey(baseUrl, apiKey);
+  }
+}
+
+/**
+ * 测试单个模型（发送消息并获取响应）
+ * 支持 OpenAI 和 Claude 两种协议
+ */
+export async function testModel(
+  provider: Provider,
+  apiKey: string,
+  modelId: string,
+  message: string = '你是什么模型'
+): Promise<ModelTestResult> {
+  const apiType = provider.apiType || 'openai';
+
+  try {
+    if (apiType === 'claude') {
+      return await testClaudeModel(provider, apiKey, modelId, message);
+    } else {
+      return await testOpenAIModel(provider, apiKey, modelId, message);
+    }
+  } catch (error) {
+    return {
+      status: 'error',
+      message: t('apiTest.modelTestFailed'),
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * 测试 OpenAI 兼容协议的模型
+ */
+async function testOpenAIModel(
+  provider: Provider,
+  apiKey: string,
+  modelId: string,
+  message: string
+): Promise<ModelTestResult> {
+  const url = smartJoinUrl(provider.baseUrl, '/v1/chat/completions');
+
+  const response = await httpRequest({
+    url,
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: modelId,
+      messages: [
+        { role: 'user', content: message }
+      ],
+      max_tokens: 500,
+      temperature: 0.7,
+    }),
+    timeout: 30000,
+  });
+
+  if (response.status === 200) {
+    const data = JSON.parse(response.body);
+    const content = data.choices?.[0]?.message?.content || '';
+    return {
+      status: 'success',
+      message: t('apiTest.modelTestSuccess'),
+      response: content,
+    };
+  } else if (response.status === 401) {
+    return {
+      status: 'error',
+      message: t('apiTest.invalidKey'),
+      error: t('apiTest.authFailed'),
+    };
+  } else if (response.status === 429) {
+    return {
+      status: 'error',
+      message: t('apiTest.rateLimited'),
+      error: t('apiTest.rateLimitedDesc'),
+    };
+  } else {
+    let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+    try {
+      const errorData = JSON.parse(response.body);
+      errorMsg = errorData.error?.message || errorMsg;
+    } catch {
+      // 使用默认错误信息
+    }
+    return {
+      status: 'error',
+      message: t('apiTest.modelTestFailed'),
+      error: errorMsg,
+    };
+  }
+}
+
+/**
+ * 测试 Claude 协议的模型
+ */
+async function testClaudeModel(
+  provider: Provider,
+  apiKey: string,
+  modelId: string,
+  message: string
+): Promise<ModelTestResult> {
+  const url = smartJoinUrl(provider.baseUrl, '/v1/messages');
+
+  const response = await httpRequest({
+    url,
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: modelId,
+      max_tokens: 500,
+      messages: [
+        { role: 'user', content: message }
+      ],
+      temperature: 0.7,
+    }),
+    timeout: 30000,
+  });
+
+  if (response.status === 200) {
+    const data = JSON.parse(response.body);
+    // Claude 响应格式: content[0].text
+    const content = data.content?.[0]?.text || '';
+    return {
+      status: 'success',
+      message: t('apiTest.modelTestSuccess'),
+      response: content,
+    };
+  } else if (response.status === 401) {
+    return {
+      status: 'error',
+      message: t('apiTest.invalidKey'),
+      error: t('apiTest.authFailed'),
+    };
+  } else if (response.status === 429) {
+    return {
+      status: 'error',
+      message: t('apiTest.rateLimited'),
+      error: t('apiTest.rateLimitedDesc'),
+    };
+  } else {
+    let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+    try {
+      const errorData = JSON.parse(response.body);
+      errorMsg = errorData.error?.message || errorMsg;
+    } catch {
+      // 使用默认错误信息
+    }
+    return {
+      status: 'error',
+      message: t('apiTest.modelTestFailed'),
+      error: errorMsg,
+    };
   }
 }

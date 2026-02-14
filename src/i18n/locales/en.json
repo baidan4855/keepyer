@@ -181,7 +181,12 @@
     "modelContextWindow": "Context",
     "modelMaxInput": "Max Input",
     "modelMaxOutput": "Max Output",
-    "modelMaxReasoning": "Max Reasoning"
+    "modelMaxReasoning": "Max Reasoning",
+    "searchModels": "Search models by name...",
+    "noSearchResults": "No models found matching your search",
+    "testModel": "Test model",
+    "test": "Test",
+    "testing": "Testing..."
   },
   "apiTest": {
     "validKey": "API Key Valid",
@@ -195,6 +200,10 @@
     "providerUnreachable": "Provider unreachable",
     "keyMaybeInvalid": "API Key may be invalid",
     "providerHealthy": "Provider responded normally",
-    "unableConnect": "Unable to connect to server"
+    "unableConnect": "Unable to connect to server",
+    "modelTestSuccess": "Model test successful",
+    "modelTestFailed": "Model test failed",
+    "rateLimited": "Rate limited",
+    "rateLimitedDesc": "Please try again later"
   }
 }
