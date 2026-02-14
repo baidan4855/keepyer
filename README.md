@@ -10,6 +10,8 @@ A cross-platform LLM API key manager — a clean, lightweight desktop app for ma
 - **Key management**: Add multiple API keys per provider
 - **Expiry tracking**: Set expiration dates and automatically mark expired keys
 - **Quick copy**: One-click copy provider base URL and API keys
+- **Model search**: Search models by name or ID in the model list
+- **Model testing**: Test individual models to verify availability (supports OpenAI & Claude protocols)
 - **Local storage**: All data stays on device, nothing is uploaded
 - **Cross-platform**: Windows, macOS, and Linux
 - **Lightweight**: Built with Tauri, around 10MB
