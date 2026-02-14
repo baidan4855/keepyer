@@ -72,8 +72,8 @@ export default function ModelsModal() {
       // 解密 API Key
       const decryptedKey = await decryptApiKey(key.key);
 
-      // 根据当前语言选择测试消息
-      const testMessage = i18n.language === 'zh' ? '你是什么模型' : 'What model are you';
+      // 根据当前语言选择测试消息（支持 zh, zh-CN, zh-TW 等中文变体）
+      const testMessage = i18n.language?.startsWith('zh') ? '你是什么模型' : 'What model are you';
 
       // 发送测试请求
       const result = await testModel(provider, decryptedKey, model.id, testMessage);
@@ -166,6 +166,12 @@ export default function ModelsModal() {
                 <p className="text-sm text-slate-500">
                   {t('keys.noSearchResults') || 'No models found matching your search'}
                 </p>
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="mt-3 text-sm text-primary-600 hover:text-primary-700 font-medium"
+                >
+                  {t('keys.clearSearch') || 'Clear search'}
+                </button>
               </div>
             ) : (
               <div className="p-4 space-y-3 min-h-[200px]">

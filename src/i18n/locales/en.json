@@ -184,6 +184,7 @@
     "modelMaxReasoning": "Max Reasoning",
     "searchModels": "Search models by name...",
     "noSearchResults": "No models found matching your search",
+    "clearSearch": "Clear search",
     "testModel": "Test model",
     "test": "Test",
     "testing": "Testing..."
