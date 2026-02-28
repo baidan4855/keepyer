@@ -5,6 +5,7 @@ import ProviderDashboard from '@/domains/providers/components/ProviderDashboard'
 import AddProviderModal from '@/domains/providers/components/AddProviderModal';
 import AddKeyModal from '@/domains/keys/components/AddKeyModal';
 import ModelsModal from '@/domains/keys/components/ModelsModal';
+import DebugChatModal from '@/domains/chat/components/DebugChatModal';
 import SettingsModal from '@/domains/settings/components/SettingsModal';
 import AuthModal from '@/domains/settings/components/AuthModal';
 import PasswordSetupModal from '@/domains/settings/components/PasswordSetupModal';
@@ -34,6 +35,7 @@ function App() {
       <AddProviderModal />
       <AddKeyModal />
       <ModelsModal />
+      <DebugChatModal />
       <AuthModal />
       <PasswordSetupModal />
       <SettingsModal />

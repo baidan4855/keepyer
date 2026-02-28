@@ -1,5 +1,5 @@
 import { useStore } from '@/store';
-import { Plus, Server, Trash2, Settings } from 'lucide-react';
+import { Plus, Server, Trash2, Settings, Edit3 } from 'lucide-react';
 import { cn } from '@/shared/lib/cn';
 import { useTranslation } from 'react-i18next';
 import LanguageSwitcher from '@/shared/components/LanguageSwitcher';
@@ -11,6 +11,7 @@ export default function ProviderSidebar() {
     selectedProviderId,
     setSelectedProviderId,
     setAddProviderModalOpen,
+    setEditProviderId,
     setDeleteConfirmOpen,
     setDeleteTarget,
     setSettingsOpen,
@@ -35,7 +36,10 @@ export default function ProviderSidebar() {
 
         <div className="flex gap-2">
           <button
-            onClick={() => setAddProviderModalOpen(true)}
+            onClick={() => {
+              setEditProviderId(null);
+              setAddProviderModalOpen(true);
+            }}
             className="btn-primary flex-1 flex items-center justify-center gap-1.5 py-2"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -89,22 +93,36 @@ export default function ProviderSidebar() {
                 </div>
               </div>
 
-              {/* 删除按钮 */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setDeleteTarget({ type: 'provider', id: provider.id });
-                  setDeleteConfirmOpen(true);
-                }}
+              {/* 编辑/删除按钮 */}
+              <div
                 className={cn(
-                  'absolute top-2 right-2 p-1 rounded',
-                  'text-slate-400 hover:text-red-600 hover:bg-red-50',
+                  'absolute top-2 right-2 flex items-center gap-0.5',
                   'opacity-0 group-hover:opacity-100',
                   'transition-all duration-200'
                 )}
               >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditProviderId(provider.id);
+                  }}
+                  className="p-1 rounded text-slate-400 hover:text-primary-600 hover:bg-primary-50 transition-all duration-200"
+                  title={t('common.edit')}
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteTarget({ type: 'provider', id: provider.id });
+                    setDeleteConfirmOpen(true);
+                  }}
+                  className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all duration-200"
+                  title={t('common.delete')}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           ))
         )}

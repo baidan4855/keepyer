@@ -1,11 +1,12 @@
 import { useStore } from '@/store';
 import { X, ChevronDown } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/shared/lib/cn';
 import { isValidUrl } from '@/shared/lib/helpers';
 import { toast } from '@/shared/lib/toast';
 import type { ApiProviderType } from '@/types';
+import { getDefaultSystemPrompt } from '@/shared/lib/prompts';
 
 type ApiType = ApiProviderType;
 
@@ -96,12 +97,51 @@ function ApiTypeSelect({ value, onChange }: { value: ApiType; onChange: (v: ApiT
 }
 
 export default function AddProviderModal() {
-  const { t } = useTranslation();
-  const { isAddProviderModalOpen, setAddProviderModalOpen, addProvider } = useStore();
+  const { t, i18n } = useTranslation();
+  const {
+    providers,
+    isAddProviderModalOpen,
+    editProviderId,
+    setAddProviderModalOpen,
+    addProvider,
+    updateProvider,
+  } = useStore();
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiType, setApiType] = useState<ApiType>('openai');
+  const defaultSystemPrompt = useMemo(() => getDefaultSystemPrompt(i18n.language), [i18n.language]);
+  const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt);
   const [error, setError] = useState('');
+
+  const editingProvider = useMemo(() => {
+    if (!editProviderId) return null;
+    return providers.find((provider) => provider.id === editProviderId) || null;
+  }, [editProviderId, providers]);
+  const isEditing = !!editingProvider;
+
+  useEffect(() => {
+    if (!isAddProviderModalOpen) {
+      setName('');
+      setBaseUrl('');
+      setApiType('openai');
+      setSystemPrompt(defaultSystemPrompt);
+      setError('');
+      return;
+    }
+
+    if (editingProvider) {
+      setName(editingProvider.name);
+      setBaseUrl(editingProvider.baseUrl);
+      setApiType(editingProvider.apiType || 'openai');
+      setSystemPrompt(editingProvider.systemPrompt?.trim() || defaultSystemPrompt);
+    } else {
+      setName('');
+      setBaseUrl('');
+      setApiType('openai');
+      setSystemPrompt(defaultSystemPrompt);
+    }
+    setError('');
+  }, [defaultSystemPrompt, editingProvider, isAddProviderModalOpen]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,11 +163,19 @@ export default function AddProviderModal() {
     }
 
     try {
-      addProvider({
+      const payload = {
         name: name.trim(),
         baseUrl: baseUrl.trim(),
         apiType,
-      });
+        systemPrompt: systemPrompt.trim() || defaultSystemPrompt,
+      };
+
+      if (editingProvider) {
+        updateProvider(editingProvider.id, payload);
+      } else {
+        addProvider(payload);
+      }
+
       toast.success(t('notifications.saveSuccess') || '保存成功');
       handleClose();
     } catch (err) {
@@ -136,10 +184,6 @@ export default function AddProviderModal() {
   };
 
   const handleClose = () => {
-    setName('');
-    setBaseUrl('');
-    setApiType('openai');
-    setError('');
     setAddProviderModalOpen(false);
   };
 
@@ -159,7 +203,7 @@ export default function AddProviderModal() {
           {/* 标题 */}
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-lg font-bold text-slate-800">
-              {t('modals.addProvider.title')}
+              {isEditing ? t('modals.editProvider.title') : t('modals.addProvider.title')}
             </h2>
             <button
               onClick={handleClose}
@@ -207,6 +251,20 @@ export default function AddProviderModal() {
               <ApiTypeSelect value={apiType} onChange={setApiType} />
             </div>
 
+            <div>
+              <label htmlFor="systemPrompt" className="block text-sm font-medium text-slate-700 mb-1.5">
+                {t('modals.addProvider.systemPrompt')}
+              </label>
+              <textarea
+                id="systemPrompt"
+                value={systemPrompt}
+                onChange={(e) => setSystemPrompt(e.target.value)}
+                placeholder={t('modals.addProvider.systemPromptPlaceholder')}
+                rows={4}
+                className="input resize-y py-2.5 px-3 text-sm"
+              />
+            </div>
+
             {error && (
               <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
                 {error}
@@ -222,7 +280,7 @@ export default function AddProviderModal() {
                 {t('common.cancel')}
               </button>
               <button type="submit" className="btn-primary flex-1 py-2.5">
-                {t('modals.addProvider.submit')}
+                {isEditing ? t('modals.editProvider.save') : t('modals.addProvider.submit')}
               </button>
             </div>
           </form>

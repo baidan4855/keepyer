@@ -8,6 +8,7 @@ export interface Provider {
   name: string;
   baseUrl: string;
   apiType?: ApiProviderType;
+  systemPrompt?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -78,6 +79,7 @@ export interface AddProviderForm {
   name: string;
   baseUrl: string;
   apiType?: ApiProviderType;
+  systemPrompt?: string;
 }
 
 /**
@@ -107,6 +109,15 @@ export interface ModelTestResult {
   response?: string;
   error?: string;
   timestamp?: number;
+  httpStatus?: number;
+  responseHeaders?: Record<string, string>;
+  rawResponse?: string;
+  responsePayload?: unknown;
+  responseId?: string;
+  responseModel?: string;
+  stopReason?: string;
+  usage?: Record<string, unknown>;
+  retryCount?: number;
 }
 
 /**
@@ -126,6 +137,7 @@ export interface AppState {
   apiKeys: ApiKey[];
   selectedProviderId: string | null;
   isAddProviderModalOpen: boolean;
+  editProviderId: string | null;
   isAddKeyModalOpen: boolean;
   editKeyId: string | null;
   isDeleteConfirmOpen: boolean;
@@ -133,6 +145,8 @@ export interface AppState {
   copiedItem: { type: 'key' | 'url'; id: string } | null;
   isModelsModalOpen: boolean;
   modelsModalKeyId: string | null;
+  isDebugChatOpen: boolean;
+  debugChatKeyId: string | null;
   securitySettings: SecuritySettings;
   isAuthModalOpen: boolean;
   isPasswordSetupOpen: boolean;

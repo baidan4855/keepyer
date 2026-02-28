@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Copy, Plus } from 'lucide-react';
+import { Check, Copy, Plus, Edit3 } from 'lucide-react';
 import { useStore } from '@/store';
 import ProviderEmptyState from './ProviderEmptyState';
 import KeyCard from '@/domains/keys/components/KeyCard';
@@ -15,6 +15,7 @@ export default function ProviderDashboard() {
   const {
     getSelectedProvider,
     setAddKeyModalOpen,
+    setEditProviderId,
     isAddKeyModalOpen,
     setEditKeyId,
     setCopiedItem,
@@ -26,6 +27,7 @@ export default function ProviderDashboard() {
     setDeleteTarget,
     setDeleteConfirmOpen,
     setModelsModalOpen,
+    setDebugChatOpen,
     updateKeyModels,
   } = useStore();
 
@@ -190,13 +192,23 @@ export default function ProviderDashboard() {
             </div>
           </div>
 
-          <button
-            onClick={() => setAddKeyModalOpen(true)}
-            className="btn-primary flex items-center gap-1.5 py-2 px-3"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            {t('mainContent.addKey')}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => selectedProvider && setEditProviderId(selectedProvider.id)}
+              className="btn-secondary flex items-center gap-1.5 py-2 px-3"
+              title={t('common.edit')}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              {t('common.edit')}
+            </button>
+            <button
+              onClick={() => setAddKeyModalOpen(true)}
+              className="btn-primary flex items-center gap-1.5 py-2 px-3"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              {t('mainContent.addKey')}
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-4 mt-3">
@@ -238,6 +250,7 @@ export default function ProviderDashboard() {
                 onEdit={() => handleEditKey(key.id)}
                 onDelete={() => handleDeleteKey(key.id)}
                 onShowModels={() => setModelsModalOpen(true, key.id)}
+                onOpenDebugChat={() => setDebugChatOpen(true, key.id)}
                 testResult={testResults[key.id]}
                 decryptedKey={decryptedKeys[key.id]}
               />

@@ -3,10 +3,10 @@
  * 简洁美观的设计，与主视觉风格一致
  */
 
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useStore } from '@/store';
-import { X, Search, Play, Loader2, CheckCircle2, XCircle, Square } from 'lucide-react';
+import { X, Search, Play, CheckCircle2, XCircle, Square } from 'lucide-react';
 import { testModel, type ModelTestResult } from '@/domains/keys/lib/api-test';
 import { decryptApiKey } from '@/domains/settings/lib/secure-storage';
 import type { ApiModel } from '@/types';
@@ -50,14 +50,14 @@ export default function ModelsModal() {
   // 获取当前 key 对应的 provider
   const provider = useMemo(() => {
     if (!key) return null;
-    return providers.find(p => p.id === key.providerId) || null;
+    return providers.find((p) => p.id === key.providerId) || null;
   }, [key, providers]);
 
   // 根据搜索词过滤模型
   const filteredModels = useMemo(() => {
     if (!searchQuery.trim()) return models;
     const query = searchQuery.toLowerCase();
-    return models.filter(model =>
+    return models.filter((model) =>
       model.name.toLowerCase().includes(query) ||
       model.id.toLowerCase().includes(query)
     );
@@ -71,8 +71,9 @@ export default function ModelsModal() {
 
   const handleClose = () => {
     // 取消所有进行中的测试
-    abortControllersRef.forEach(controller => controller.abort());
+    abortControllersRef.forEach((controller) => controller.abort());
     abortControllersRef.clear();
+
     setModelsModalOpen(false, null);
     setSearchQuery('');
     setTestingModelIds(new Set());
@@ -82,11 +83,10 @@ export default function ModelsModal() {
   const handleTestModel = async (model: ApiModel) => {
     if (!key || !provider) return;
 
-    const resultKey = getTestResultKey(key.id, model.id);
     const abortController = new AbortController();
     abortControllersRef.set(model.id, abortController);
 
-    setTestingModelIds(prev => new Set(prev).add(model.id));
+    setTestingModelIds((prev) => new Set(prev).add(model.id));
     setModelTestResult(key.id, model.id, { status: 'loading' });
 
     try {
@@ -104,11 +104,11 @@ export default function ModelsModal() {
       setModelTestResult(key.id, model.id, {
         status: 'error',
         message: t('apiTest.modelTestFailed'),
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       });
     } finally {
       abortControllersRef.delete(model.id);
-      setTestingModelIds(prev => {
+      setTestingModelIds((prev) => {
         const newSet = new Set(prev);
         newSet.delete(model.id);
         return newSet;
@@ -157,7 +157,7 @@ export default function ModelsModal() {
               </div>
               <div className="flex items-center gap-2">
                 {/* 清除所有测试结果按钮 */}
-                {key && Object.keys(modelTestResults).some(k => k.startsWith(`${key.id}:`)) && (
+                {key && Object.keys(modelTestResults).some((k) => k.startsWith(`${key.id}:`)) && (
                   <button
                     onClick={handleClearAllResults}
                     className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-all duration-200"
@@ -267,40 +267,41 @@ export default function ModelsModal() {
                         const result = getCurrentTestResult(model.id);
                         if (!result || result.status === 'loading') return null;
                         return (
-                        <div className={`mb-4 p-3 rounded-lg text-sm ${
-                          result.status === 'success'
-                            ? 'bg-green-50 border border-green-200 text-green-800'
-                            : 'bg-red-50 border border-red-200 text-red-800'
-                        }`}>
-                          <div className="flex items-start gap-2">
-                            {result.status === 'success' ? (
-                              <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0 text-green-600" />
-                            ) : (
-                              <XCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-600" />
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium mb-1">
-                                {result.message}
-                              </p>
-                              {result.response && (
-                                <div className="mt-2 p-2 bg-white/60 rounded text-slate-700 whitespace-pre-wrap break-words">
-                                  {result.response}
-                                </div>
+                          <div className={`mb-4 p-3 rounded-lg text-sm ${
+                            result.status === 'success'
+                              ? 'bg-green-50 border border-green-200 text-green-800'
+                              : 'bg-red-50 border border-red-200 text-red-800'
+                          }`}>
+                            <div className="flex items-start gap-2">
+                              {result.status === 'success' ? (
+                                <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0 text-green-600" />
+                              ) : (
+                                <XCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-600" />
                               )}
-                              {result.error && (
-                                <p className="text-red-700/80 text-xs mt-1">
-                                  {result.error}
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium mb-1">
+                                  {result.message}
                                 </p>
-                              )}
-                              {result.timestamp && (
-                                <p className="text-xs text-slate-400 mt-2">
-                                  {new Date(result.timestamp).toLocaleString()}
-                                </p>
-                              )}
+                                {result.response && (
+                                  <div className="mt-2 p-2 bg-white/60 rounded text-slate-700 whitespace-pre-wrap break-words">
+                                    {result.response}
+                                  </div>
+                                )}
+                                {result.error && (
+                                  <p className="text-red-700/80 text-xs mt-1">
+                                    {result.error}
+                                  </p>
+                                )}
+                                {result.timestamp && (
+                                  <p className="text-xs text-slate-400 mt-2">
+                                    {new Date(result.timestamp).toLocaleString()}
+                                  </p>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      )})()}
+                        );
+                      })()}
 
                       {/* 基本信息区域 */}
                       <div className="mb-4">

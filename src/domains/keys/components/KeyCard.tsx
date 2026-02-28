@@ -1,4 +1,4 @@
-import { Check, CheckCircle, Copy, Edit, Eye, EyeOff, List, Loader2, Rocket, Trash2, XCircle } from 'lucide-react';
+import { Bug, Check, CheckCircle, Copy, Edit, Eye, EyeOff, List, Loader2, Rocket, Trash2, XCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/shared/lib/cn';
@@ -13,6 +13,7 @@ interface KeyCardProps {
   onEdit: () => void;
   onDelete: () => void;
   onShowModels?: () => void;
+  onOpenDebugChat?: () => void;
   isCopied: boolean;
   testResult?: ApiTestResult;
   decryptedKey?: string;
@@ -26,6 +27,7 @@ export default function KeyCard({
   onEdit,
   onDelete,
   onShowModels,
+  onOpenDebugChat,
   isCopied,
   testResult,
   decryptedKey,
@@ -121,6 +123,15 @@ export default function KeyCard({
         </div>
 
         <div className="flex items-center gap-1">
+          {apiKey.models && apiKey.models.length > 0 && onOpenDebugChat && (
+            <button
+              onClick={onOpenDebugChat}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-violet-600 hover:bg-violet-50 transition-all"
+              title={t('keys.debugChat') || '拷问'}
+            >
+              <Bug className="w-3.5 h-3.5" />
+            </button>
+          )}
           {apiKey.models && apiKey.models.length > 0 && onShowModels && (
             <button
               onClick={onShowModels}

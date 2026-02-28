@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import i18n from '@/i18n';
 import type {
   Provider,
   ApiKey,
@@ -19,6 +20,7 @@ import {
   buildProviderWithKeys,
 } from '@/shared/lib/helpers';
 import { encryptApiKey } from '@/domains/settings/lib/secure-storage';
+import { getDefaultSystemPrompt, isLegacyDefaultSystemPrompt } from '@/shared/lib/prompts';
 
 interface StoreActions {
   // 提供方操作
@@ -38,12 +40,14 @@ interface StoreActions {
   // UI 状态
   setSelectedProviderId: (id: string | null) => void;
   setAddProviderModalOpen: (open: boolean) => void;
+  setEditProviderId: (id: string | null) => void;
   setAddKeyModalOpen: (open: boolean) => void;
   setEditKeyId: (id: string | null) => void;
   setDeleteConfirmOpen: (open: boolean) => void;
   setDeleteTarget: (target: { type: 'provider' | 'key'; id: string } | null) => void;
   setCopiedItem: (item: { type: 'key' | 'url'; id: string } | null) => void;
   setModelsModalOpen: (open: boolean, keyId: string | null) => void;
+  setDebugChatOpen: (open: boolean, keyId: string | null) => void;
 
   // 安全设置
   updateSecuritySettings: (settings: Partial<SecuritySettings>) => void;
@@ -84,6 +88,7 @@ const initialState: AppState = {
   apiKeys: [],
   selectedProviderId: null,
   isAddProviderModalOpen: false,
+  editProviderId: null,
   isAddKeyModalOpen: false,
   editKeyId: null,
   isDeleteConfirmOpen: false,
@@ -91,6 +96,8 @@ const initialState: AppState = {
   copiedItem: null,
   isModelsModalOpen: false,
   modelsModalKeyId: null,
+  isDebugChatOpen: false,
+  debugChatKeyId: null,
   securitySettings: {
     requireAuthToView: false,
     requireAuthToCopy: false,
@@ -106,6 +113,8 @@ const initialState: AppState = {
 
 const PERSIST_STORAGE_KEY = 'keeyper-storage';
 
+const getLocalizedDefaultSystemPrompt = () => getDefaultSystemPrompt(i18n.language);
+
 export const useStore = create<AppStore>()(
   persist(
     (set, get) => ({
@@ -113,11 +122,13 @@ export const useStore = create<AppStore>()(
 
       // 提供方操作
       addProvider: (data) => {
+        const defaultSystemPrompt = getLocalizedDefaultSystemPrompt();
         const newProvider: Provider = {
           id: generateId(),
           name: data.name,
           baseUrl: data.baseUrl,
           apiType: data.apiType || 'openai',
+          systemPrompt: data.systemPrompt?.trim() || defaultSystemPrompt,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -128,10 +139,16 @@ export const useStore = create<AppStore>()(
       },
 
       updateProvider: (id, data) => {
+        const defaultSystemPrompt = getLocalizedDefaultSystemPrompt();
+        const normalizedData: Partial<AddProviderForm> = { ...data };
+        if ('systemPrompt' in normalizedData) {
+          normalizedData.systemPrompt = normalizedData.systemPrompt?.trim() || defaultSystemPrompt;
+        }
+
         set((state) => ({
           providers: state.providers.map((provider) =>
             provider.id === id
-              ? { ...provider, ...data, updatedAt: new Date() }
+              ? { ...provider, ...normalizedData, updatedAt: new Date() }
               : provider
           ),
         }));
@@ -205,13 +222,19 @@ export const useStore = create<AppStore>()(
 
       // UI 状态
       setSelectedProviderId: (id) => set({ selectedProviderId: id }),
-      setAddProviderModalOpen: (open) => set({ isAddProviderModalOpen: open }),
+      setAddProviderModalOpen: (open) =>
+        set((state) => ({
+          isAddProviderModalOpen: open,
+          editProviderId: open ? state.editProviderId : null,
+        })),
+      setEditProviderId: (id) => set({ editProviderId: id, isAddProviderModalOpen: !!id }),
       setAddKeyModalOpen: (open) => set({ isAddKeyModalOpen: open, editKeyId: null }),
       setEditKeyId: (id) => set({ editKeyId: id, isAddKeyModalOpen: !!id }),
       setDeleteConfirmOpen: (open) => set({ isDeleteConfirmOpen: open }),
       setDeleteTarget: (target) => set({ deleteTarget: target }),
       setCopiedItem: (item) => set({ copiedItem: item }),
       setModelsModalOpen: (open, keyId) => set({ isModelsModalOpen: open, modelsModalKeyId: keyId }),
+      setDebugChatOpen: (open, keyId) => set({ isDebugChatOpen: open, debugChatKeyId: keyId }),
 
       // 安全设置
       updateSecuritySettings: (settings) =>
@@ -294,12 +317,26 @@ export const useStore = create<AppStore>()(
 
       // 批量导入数据
       importData: (providers, apiKeys) => {
-        set({ providers, apiKeys });
+        const defaultSystemPrompt = getLocalizedDefaultSystemPrompt();
+        set({
+          providers: providers.map((provider) => ({
+            ...provider,
+            apiType: provider.apiType || 'openai',
+            systemPrompt: provider.systemPrompt?.trim()
+              ? (
+                  isLegacyDefaultSystemPrompt(provider.systemPrompt)
+                    ? defaultSystemPrompt
+                    : provider.systemPrompt
+                )
+              : defaultSystemPrompt,
+          })),
+          apiKeys,
+        });
       },
     }),
     {
       name: PERSIST_STORAGE_KEY,
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage, {
         reviver: dateReviver,
       }),
@@ -309,8 +346,25 @@ export const useStore = create<AppStore>()(
         }
 
         const state = persistedState as Record<string, unknown>;
+        const defaultSystemPrompt = getLocalizedDefaultSystemPrompt();
+        const normalizeProviders = (providers: any[]) =>
+          providers.map((provider) => ({
+            ...provider,
+            apiType: provider.apiType || 'openai',
+            systemPrompt: typeof provider.systemPrompt === 'string' && provider.systemPrompt.trim()
+              ? (
+                  isLegacyDefaultSystemPrompt(provider.systemPrompt)
+                    ? defaultSystemPrompt
+                    : provider.systemPrompt
+                )
+              : defaultSystemPrompt,
+          }));
+
         if ('providers' in state || 'selectedProviderId' in state) {
-          return persistedState as AppState;
+          return {
+            ...state,
+            providers: normalizeProviders(((state as any).providers ?? []) as any[]),
+          } as AppState;
         }
 
         const legacyProviders = (state as any).services ?? [];
@@ -322,7 +376,7 @@ export const useStore = create<AppStore>()(
 
         return {
           ...state,
-          providers: legacyProviders,
+          providers: normalizeProviders(legacyProviders),
           apiKeys: migratedKeys,
           selectedProviderId: (state as any).selectedServiceId ?? null,
         } as AppState;
