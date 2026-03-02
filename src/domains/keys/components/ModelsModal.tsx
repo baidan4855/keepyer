@@ -10,6 +10,7 @@ import { X, Search, Play, CheckCircle2, XCircle, Square } from 'lucide-react';
 import { testModel, type ModelTestResult } from '@/domains/keys/lib/api-test';
 import { decryptApiKey } from '@/domains/settings/lib/secure-storage';
 import type { ApiModel } from '@/types';
+import { formatTokenCount } from '@/shared/lib/token-usage';
 
 // 测试结果存储键前缀
 const getTestResultKey = (keyId: string, modelId: string) => `${keyId}:${modelId}`;
@@ -39,6 +40,7 @@ export default function ModelsModal() {
     modelTestResults,
     setModelTestResult,
     clearModelTestResults,
+    getModelTokenUsage,
   } = useStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [testingModelIds, setTestingModelIds] = useState<Set<string>>(new Set());
@@ -297,6 +299,35 @@ export default function ModelsModal() {
                                     {new Date(result.timestamp).toLocaleString()}
                                   </p>
                                 )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {(() => {
+                        const usageStats = getModelTokenUsage(key.id, model.id);
+                        return (
+                          <div className="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                            <div className="text-xs text-slate-500 uppercase tracking-wide font-medium">
+                              {t('keys.tokenUsage') || 'Proxy Token Usage'}
+                            </div>
+                            <div className="grid grid-cols-4 gap-2 mt-2">
+                              <div className="rounded-md bg-white border border-slate-200 px-2 py-1.5">
+                                <div className="text-[10px] text-slate-500">{t('keys.tokenInput') || 'Input'}</div>
+                                <div className="text-xs font-semibold text-slate-800">{formatTokenCount(usageStats?.inputTokens)}</div>
+                              </div>
+                              <div className="rounded-md bg-white border border-slate-200 px-2 py-1.5">
+                                <div className="text-[10px] text-slate-500">{t('keys.tokenOutput') || 'Output'}</div>
+                                <div className="text-xs font-semibold text-slate-800">{formatTokenCount(usageStats?.outputTokens)}</div>
+                              </div>
+                              <div className="rounded-md bg-white border border-slate-200 px-2 py-1.5">
+                                <div className="text-[10px] text-slate-500">{t('keys.tokenTotal') || 'Total'}</div>
+                                <div className="text-xs font-semibold text-slate-800">{formatTokenCount(usageStats?.totalTokens)}</div>
+                              </div>
+                              <div className="rounded-md bg-white border border-slate-200 px-2 py-1.5">
+                                <div className="text-[10px] text-slate-500">{t('keys.requestCount') || 'Requests'}</div>
+                                <div className="text-xs font-semibold text-slate-800">{usageStats?.requestCount ?? 0}</div>
                               </div>
                             </div>
                           </div>

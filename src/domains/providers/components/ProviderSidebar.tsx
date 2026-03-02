@@ -3,6 +3,7 @@ import { Bot, Plus, Server, Trash2, Settings, Edit3 } from "lucide-react";
 import { cn } from "@/shared/lib/cn";
 import { useTranslation } from "react-i18next";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
+import { formatTokenCount } from "@/shared/lib/token-usage";
 
 export default function ProviderSidebar() {
   const { t } = useTranslation();
@@ -17,6 +18,7 @@ export default function ProviderSidebar() {
     setDeleteConfirmOpen,
     setDeleteTarget,
     setSettingsOpen,
+    getProviderTokenUsage,
   } = useStore();
 
   const providers = getProvidersWithKeys();
@@ -139,6 +141,21 @@ export default function ProviderSidebar() {
                     {provider.expiredCount}
                   </span>
                 </div>
+              </div>
+
+              <div className="mt-2 text-[11px] text-slate-500 leading-5">
+                {(() => {
+                  const usage = getProviderTokenUsage(provider.id);
+                  return (
+                    <>
+                      <span>{t("keys.tokenInput") || "Input"}: {formatTokenCount(usage?.inputTokens)}</span>
+                      <span className="mx-1">/</span>
+                      <span>{t("keys.tokenOutput") || "Output"}: {formatTokenCount(usage?.outputTokens)}</span>
+                      <span className="mx-1">/</span>
+                      <span>{t("keys.tokenTotal") || "Total"}: {formatTokenCount(usage?.totalTokens)}</span>
+                    </>
+                  );
+                })()}
               </div>
 
               {/* 编辑/删除按钮 */}

@@ -10,6 +10,8 @@ export interface GatewayRuntimeRouteConfig {
   protocol: GatewayRouteProtocol;
   baseUrl: string;
   apiKey: string;
+  providerId?: string;
+  keyId?: string;
   anthropicVersion?: string;
 }
 
@@ -44,7 +46,9 @@ function toRouteName(provider: Provider, apiKey: ApiKey, usedNames: Set<string>)
 }
 
 function resolveProtocol(provider: Provider): GatewayRouteProtocol {
-  return provider.apiType === 'claude' ? 'anthropic' : 'openai';
+  if (provider.apiType === 'claude') return 'anthropic';
+  if (provider.apiType === 'codex') return 'codex';
+  return 'openai';
 }
 
 export async function buildGatewayRuntimeConfig(
@@ -97,6 +101,8 @@ export async function buildGatewayRuntimeConfig(
         protocol,
         baseUrl: provider.baseUrl.trim(),
         apiKey: decryptedApiKey,
+        providerId: provider.id,
+        keyId: apiKey.id,
         ...(protocol === 'anthropic' ? { anthropicVersion: '2023-06-01' } : {}),
       };
     }

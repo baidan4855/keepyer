@@ -7,6 +7,7 @@ import { isValidUrl } from '@/shared/lib/helpers';
 import { toast } from '@/shared/lib/toast';
 import type { ApiProviderType } from '@/types';
 import { getDefaultSystemPrompt } from '@/shared/lib/prompts';
+import { getCodexCliStatus } from '@/domains/chat/lib/codex-exec';
 
 type ApiType = ApiProviderType;
 
@@ -24,6 +25,7 @@ function ApiTypeSelect({ value, onChange }: { value: ApiType; onChange: (v: ApiT
     { value: 'openai', label: t('modals.addProvider.apiTypes.openai') },
     { value: 'claude', label: t('modals.addProvider.apiTypes.claude') },
     { value: 'generic', label: t('modals.addProvider.apiTypes.generic') },
+    { value: 'codex', label: t('modals.addProvider.apiTypes.codex') },
   ];
   const selectedOption = apiTypeOptions.find(opt => opt.value === value);
 
@@ -112,6 +114,7 @@ export default function AddProviderModal() {
   const defaultSystemPrompt = useMemo(() => getDefaultSystemPrompt(i18n.language), [i18n.language]);
   const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt);
   const [error, setError] = useState('');
+  const [isCheckingCodexCli, setIsCheckingCodexCli] = useState(false);
 
   const editingProvider = useMemo(() => {
     if (!editProviderId) return null;
@@ -126,6 +129,7 @@ export default function AddProviderModal() {
       setApiType('openai');
       setSystemPrompt(defaultSystemPrompt);
       setError('');
+      setIsCheckingCodexCli(false);
       return;
     }
 
@@ -141,6 +145,7 @@ export default function AddProviderModal() {
       setSystemPrompt(defaultSystemPrompt);
     }
     setError('');
+    setIsCheckingCodexCli(false);
   }, [defaultSystemPrompt, editingProvider, isAddProviderModalOpen]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -152,20 +157,48 @@ export default function AddProviderModal() {
       return;
     }
 
-    if (!baseUrl.trim()) {
+    const normalizedBaseUrl = baseUrl.trim();
+    const isCodexProvider = apiType === 'codex';
+
+    if (!normalizedBaseUrl && !isCodexProvider) {
       setError(t('modals.addProvider.error.requiredUrl'));
       return;
     }
 
-    if (!isValidUrl(baseUrl)) {
+    if (!isCodexProvider && !isValidUrl(normalizedBaseUrl)) {
       setError(t('modals.addProvider.error.invalidUrl'));
       return;
+    }
+
+    if (!isEditing && isCodexProvider) {
+      setIsCheckingCodexCli(true);
+      try {
+        const cliStatus = await getCodexCliStatus();
+        if (!cliStatus.installed) {
+          const installHint = t('modals.addProvider.error.codexCliNotInstalled')
+            || 'Codex CLI is not installed. Please install it first and ensure `codex` is in PATH.';
+          const details = cliStatus.message?.trim()
+            ? `${installHint} (${cliStatus.message.trim()})`
+            : installHint;
+          setError(details);
+          toast.error(details);
+          return;
+        }
+      } catch {
+        const checkFailed = t('modals.addProvider.error.codexCliCheckFailed')
+          || 'Failed to check Codex CLI. Please verify the installation and try again.';
+        setError(checkFailed);
+        toast.error(checkFailed);
+        return;
+      } finally {
+        setIsCheckingCodexCli(false);
+      }
     }
 
     try {
       const payload = {
         name: name.trim(),
-        baseUrl: baseUrl.trim(),
+        baseUrl: normalizedBaseUrl,
         apiType,
         systemPrompt: systemPrompt.trim() || defaultSystemPrompt,
       };
@@ -178,7 +211,7 @@ export default function AddProviderModal() {
 
       toast.success(t('notifications.saveSuccess') || '保存成功');
       handleClose();
-    } catch (err) {
+    } catch {
       toast.error(t('notifications.saveFailed') || '保存失败');
     }
   };
@@ -186,6 +219,13 @@ export default function AddProviderModal() {
   const handleClose = () => {
     setAddProviderModalOpen(false);
   };
+
+  const baseUrlLabel = apiType === 'codex'
+    ? (t('modals.addProvider.workspacePath') || '工作目录（可选）')
+    : t('modals.addProvider.baseUrl');
+  const baseUrlPlaceholder = apiType === 'codex'
+    ? (t('modals.addProvider.workspacePathPlaceholder') || '/path/to/your/project')
+    : t('modals.addProvider.baseUrlPlaceholder');
 
   if (!isAddProviderModalOpen) return null;
 
@@ -232,14 +272,14 @@ export default function AddProviderModal() {
 
             <div>
               <label htmlFor="baseUrl" className="block text-sm font-medium text-slate-700 mb-1.5">
-                {t('modals.addProvider.baseUrl')}
+                {baseUrlLabel}
               </label>
               <input
                 id="baseUrl"
-                type="url"
+                type={apiType === 'codex' ? 'text' : 'url'}
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={t('modals.addProvider.baseUrlPlaceholder')}
+                placeholder={baseUrlPlaceholder}
                 className="input py-2.5 px-3 text-sm"
               />
             </div>
@@ -276,11 +316,18 @@ export default function AddProviderModal() {
                 type="button"
                 onClick={handleClose}
                 className="btn-secondary flex-1 py-2.5"
+                disabled={isCheckingCodexCli}
               >
                 {t('common.cancel')}
               </button>
-              <button type="submit" className="btn-primary flex-1 py-2.5">
-                {isEditing ? t('modals.editProvider.save') : t('modals.addProvider.submit')}
+              <button
+                type="submit"
+                className="btn-primary flex-1 py-2.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={isCheckingCodexCli}
+              >
+                {isCheckingCodexCli
+                  ? (t('common.loading') || 'Loading...')
+                  : (isEditing ? t('modals.editProvider.save') : t('modals.addProvider.submit'))}
               </button>
             </div>
           </form>

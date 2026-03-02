@@ -29,7 +29,7 @@ export default function ToastHost() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+    <div className="fixed bottom-4 right-4 z-50 flex max-h-[80vh] flex-col gap-2 overflow-y-auto pr-1 pointer-events-none">
       {toasts.map((toast) => {
         const styles = variantStyles[toast.variant];
         const Icon = variantIcons[toast.variant];
@@ -38,7 +38,7 @@ export default function ToastHost() {
           <div
             key={toast.id}
             className={cn(
-              'w-80 rounded-xl border shadow-soft-lg backdrop-blur-md px-4 py-3',
+              'w-[min(30rem,calc(100vw-2rem))] rounded-xl border shadow-soft-lg backdrop-blur-md px-4 py-3',
               'animate-slide-in-right',
               'pointer-events-auto',
               styles.container
@@ -47,9 +47,11 @@ export default function ToastHost() {
             <div className="flex items-start gap-3">
               <Icon className={cn('w-5 h-5 mt-0.5', styles.icon)} />
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate">{toast.title}</p>
+                <p className="text-sm font-semibold whitespace-pre-wrap break-words leading-5">
+                  {toast.title}
+                </p>
                 {toast.description && (
-                  <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">
+                  <p className="text-xs text-slate-600 mt-1 whitespace-pre-wrap break-words leading-5 max-h-48 overflow-y-auto pr-1">
                     {toast.description}
                   </p>
                 )}

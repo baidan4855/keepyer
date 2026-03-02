@@ -29,6 +29,8 @@ export default function ProviderDashboard() {
     setModelsModalOpen,
     setDebugChatOpen,
     updateKeyModels,
+    getKeyTokenUsage,
+    recordModelTokenUsage,
   } = useStore();
 
   const selectedProvider = getSelectedProvider();
@@ -132,6 +134,12 @@ export default function ProviderDashboard() {
     // 如果测试成功且有模型数据，保存到 store
     if (result.status === 'success' && result.models && result.models.length > 0) {
       updateKeyModels(keyId, result.models);
+    }
+
+    if (result.usage) {
+      const targetKey = selectedProvider.keys.find((item) => item.id === keyId);
+      const fallbackModelId = targetKey?.models?.[0]?.id || result.models?.[0]?.id || 'probe';
+      recordModelTokenUsage(selectedProvider.id, keyId, fallbackModelId, result.usage);
     }
   };
 
@@ -253,6 +261,7 @@ export default function ProviderDashboard() {
                 onOpenDebugChat={() => setDebugChatOpen(true, key.id)}
                 testResult={testResults[key.id]}
                 decryptedKey={decryptedKeys[key.id]}
+                tokenUsage={getKeyTokenUsage(key.id)}
               />
             ))}
           </div>

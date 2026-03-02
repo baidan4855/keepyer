@@ -1,7 +1,7 @@
 /**
  * 提供方模型
  */
-export type ApiProviderType = 'openai' | 'claude' | 'generic';
+export type ApiProviderType = 'openai' | 'claude' | 'generic' | 'codex';
 
 export interface Provider {
   id: string;
@@ -103,7 +103,7 @@ export interface SecuritySettings {
 /**
  * Claude Code 网关路由协议
  */
-export type GatewayRouteProtocol = 'anthropic' | 'openai';
+export type GatewayRouteProtocol = 'anthropic' | 'openai' | 'codex';
 
 /**
  * Claude Code 网关路由配置
@@ -156,6 +156,30 @@ export interface ModelTestResult {
 }
 
 /**
+ * Token 使用统计
+ */
+export interface TokenUsageStats {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requestCount: number;
+  updatedAt: number;
+}
+
+/**
+ * 实时 Token 增量（仅内存态，不持久化）
+ */
+export interface LiveTokenUsageDelta {
+  providerId: string;
+  keyId: string;
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  updatedAt: number;
+}
+
+/**
  * 进行中的测试任务
  */
 export interface PendingModelTest {
@@ -191,5 +215,9 @@ export interface AppState {
   pendingAuthKeyId: string | null;
   lastAuthTime: number | null;
   modelTestResults: Record<string, ModelTestResult>;
+  modelTokenUsage: Record<string, TokenUsageStats>;
+  keyTokenUsage: Record<string, TokenUsageStats>;
+  providerTokenUsage: Record<string, TokenUsageStats>;
+  liveModelTokenUsage: Record<string, LiveTokenUsageDelta>;
   gatewayConfig: ClaudeGatewayConfig;
 }

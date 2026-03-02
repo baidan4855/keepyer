@@ -4,13 +4,15 @@
 
 import { httpRequest } from '@/domains/settings/lib/secure-storage';
 import { proxyDiscoverModels, proxyLlmChat, proxyProbeModel, type LlmProtocol } from '@/domains/chat/lib/llm-proxy';
+import { runCodexExec } from '@/domains/chat/lib/codex-exec';
 import type { ApiModel, Provider } from '@/types';
 import i18n from '@/i18n';
+import { CODEX_FIXED_MODEL_IDS, getCodexFixedModels } from '@/shared/lib/codex';
 
 const t = (key: string, options?: Record<string, any>) => i18n.t(key, options) as string;
 
 export type ApiTestStatus = 'idle' | 'loading' | 'success' | 'error';
-export type ApiTestType = 'openai' | 'claude' | 'generic';
+export type ApiTestType = 'openai' | 'claude' | 'generic' | 'codex';
 
 /**
  * 模型测试结果
@@ -37,12 +39,52 @@ export interface ApiTestResult {
   message?: string;
   details?: string;
   models?: ApiModel[];
+  usage?: Record<string, unknown>;
 }
 
 export interface ModelProtocolOptions {
   inputProtocol?: LlmProtocol;
   targetProtocol?: LlmProtocol;
   enableProtocolTransform?: boolean;
+}
+
+function resolveCodexWorkingDir(baseUrl: string): string | undefined {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return undefined;
+  if (/^https?:\/\//i.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function buildCodexPrompt(
+  message: string,
+  systemPrompt?: string,
+): string {
+  const normalizedInput = message.trim();
+  const normalizedSystem = systemPrompt?.trim();
+
+  if (normalizedSystem) {
+    return [
+      'Follow the system instructions below strictly.',
+      '',
+      '<system>',
+      normalizedSystem,
+      '</system>',
+      '',
+      '<user>',
+      normalizedInput,
+      '</user>',
+      '',
+      'Reply directly to the user request.',
+    ].join('\n');
+  }
+
+  return normalizedInput;
+}
+
+function estimateTextTokens(text: string): number {
+  const normalized = text.trim();
+  if (!normalized) return 0;
+  return Math.max(1, Math.ceil(normalized.length / 4));
 }
 
 /**
@@ -477,6 +519,66 @@ async function testGenericApi(baseUrl: string, apiKey: string): Promise<ApiTestR
 }
 
 /**
+ * 测试 Codex Exec provider（本地命令执行）
+ */
+async function testCodexProvider(baseUrl: string): Promise<ApiTestResult> {
+  const probePrompt = 'Reply with exactly: pong';
+  const estimatedInputTokens = estimateTextTokens(probePrompt);
+  try {
+    const result = await runCodexExec({
+      prompt: probePrompt,
+      workingDir: resolveCodexWorkingDir(baseUrl),
+      timeoutMs: 120000,
+    });
+
+    if (!result.success) {
+      const failureText = result.output || result.stderr || '';
+      const estimatedOutputTokens = estimateTextTokens(failureText);
+      const estimatedTotalTokens = estimatedInputTokens + estimatedOutputTokens;
+      return {
+        status: 'error',
+        message: t('apiTest.requestFailed'),
+        details: result.output || result.stderr || `codex exec failed with exit code ${result.exitCode}`,
+        usage: {
+          input_tokens: estimatedInputTokens,
+          output_tokens: estimatedOutputTokens,
+          total_tokens: estimatedTotalTokens,
+          usage_source: 'estimated',
+        },
+      };
+    }
+
+    const models = getCodexFixedModels();
+    const estimatedOutputTokens = estimateTextTokens(result.output || result.stdout || '');
+    const estimatedTotalTokens = estimatedInputTokens + estimatedOutputTokens;
+    return {
+      status: 'success',
+      message: t('apiTest.validKey'),
+      details: t('apiTest.modelsFound', { count: models.length }),
+      models,
+      usage: {
+        input_tokens: estimatedInputTokens,
+        output_tokens: estimatedOutputTokens,
+        total_tokens: estimatedTotalTokens,
+        usage_source: 'estimated',
+      },
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      message: t('apiTest.connectionFailed'),
+      details: error instanceof Error ? error.message : t('apiTest.unableConnect'),
+      usage: {
+        input_tokens: estimatedInputTokens,
+        output_tokens: 0,
+        total_tokens: estimatedInputTokens,
+        usage_source: 'estimated',
+      },
+    };
+  }
+}
+
+/**
  * 测试 API Key
  */
 export async function testApiKey(
@@ -491,6 +593,8 @@ export async function testApiKey(
       return testClaudeKey(baseUrl, apiKey);
     case 'generic':
       return testGenericApi(baseUrl, apiKey);
+    case 'codex':
+      return testCodexProvider(baseUrl);
     default:
       return testOpenAIKey(baseUrl, apiKey);
   }
@@ -511,6 +615,16 @@ export async function testModel(
   protocolOptions?: ModelProtocolOptions
 ): Promise<ModelTestResult> {
   const apiType = provider.apiType || 'openai';
+  if (apiType === 'codex') {
+    return testCodexModel(
+      provider,
+      modelId,
+      message,
+      signal,
+      systemPrompt,
+    );
+  }
+
   const defaultTargetProtocol: LlmProtocol = apiType === 'claude' ? 'anthropic' : 'openai';
   const targetProtocol = protocolOptions?.targetProtocol ?? defaultTargetProtocol;
 
@@ -550,6 +664,103 @@ export async function testModel(
       status: 'error',
       message: t('apiTest.modelTestFailed'),
       error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * 测试 Codex Exec 模型
+ */
+async function testCodexModel(
+  provider: Provider,
+  modelId: string,
+  message: string,
+  signal?: AbortSignal,
+  systemPrompt?: string,
+): Promise<ModelTestResult> {
+  if (signal?.aborted) {
+    throw new Error('AbortError');
+  }
+
+  const selectedModel = modelId.trim() || CODEX_FIXED_MODEL_IDS[0];
+  const prompt = buildCodexPrompt(message, systemPrompt);
+  const estimatedInputTokens = estimateTextTokens(prompt);
+
+  try {
+    const result = await runCodexExec({
+      prompt,
+      model: selectedModel,
+      workingDir: resolveCodexWorkingDir(provider.baseUrl),
+      timeoutMs: 240000,
+    });
+
+    if (result.success) {
+      const estimatedOutputTokens = estimateTextTokens(result.output || result.stdout || '');
+      const estimatedTotalTokens = estimatedInputTokens + estimatedOutputTokens;
+      return {
+        status: 'success',
+        message: t('apiTest.modelTestSuccess'),
+        response: result.output,
+        responsePayload: {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+        },
+        rawResponse: result.stdout,
+        responseModel: selectedModel,
+        usage: {
+          input_tokens: estimatedInputTokens,
+          output_tokens: estimatedOutputTokens,
+          total_tokens: estimatedTotalTokens,
+          usage_source: 'estimated',
+        },
+        retryCount: 0,
+      };
+    }
+
+    const failureText = result.output || result.stderr || '';
+    const estimatedOutputTokens = estimateTextTokens(failureText);
+    const estimatedTotalTokens = estimatedInputTokens + estimatedOutputTokens;
+    return {
+      status: 'error',
+      message: t('apiTest.modelTestFailed'),
+      error: result.output || result.stderr || `codex exec failed with exit code ${result.exitCode}`,
+      responsePayload: {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      },
+      rawResponse: result.stdout,
+      responseModel: selectedModel,
+      usage: {
+        input_tokens: estimatedInputTokens,
+        output_tokens: estimatedOutputTokens,
+        total_tokens: estimatedTotalTokens,
+        usage_source: 'estimated',
+      },
+      retryCount: 0,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return {
+        status: 'error',
+        message: t('apiTest.testCancelled'),
+        error: t('apiTest.testCancelledDesc'),
+      };
+    }
+
+    return {
+      status: 'error',
+      message: t('apiTest.modelTestFailed'),
+      error: error instanceof Error ? error.message : String(error),
+      responseModel: selectedModel,
+      usage: {
+        input_tokens: estimatedInputTokens,
+        output_tokens: 0,
+        total_tokens: estimatedInputTokens,
+        usage_source: 'estimated',
+      },
+      retryCount: 0,
     };
   }
 }

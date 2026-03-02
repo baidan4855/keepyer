@@ -18,11 +18,16 @@ interface ToastState {
 
 const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+function resolveDefaultDuration(title: string, description?: string): number {
+  const textLength = `${title}${description ?? ''}`.length;
+  return Math.min(12000, Math.max(3500, 2200 + textLength * 35));
+}
+
 export const useToastStore = create<ToastState>((set, get) => ({
   toasts: [],
   add: (toast) => {
     const id = toast.id ?? createId();
-    const duration = toast.duration ?? 3000;
+    const duration = toast.duration ?? resolveDefaultDuration(toast.title, toast.description);
     const entry: ToastItem = { ...toast, id, duration };
 
     set((state) => ({ toasts: [...state.toasts, entry] }));

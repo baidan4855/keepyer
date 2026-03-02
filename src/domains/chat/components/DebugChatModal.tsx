@@ -21,6 +21,7 @@ import {
 } from '@/domains/chat/lib/security-probe';
 import { toast } from '@/shared/lib/toast';
 import { cn } from '@/shared/lib/cn';
+import { normalizeTokenUsage } from '@/shared/lib/token-usage';
 
 type ModelOption = {
   id: string;
@@ -44,6 +45,8 @@ const protocolSelectOptions: Array<{ value: LlmProtocol; label: string }> = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
 ];
+
+const STREAM_USAGE_UPDATE_INTERVAL_MS = 250;
 
 function ProtocolSelect({
   value,
@@ -260,6 +263,9 @@ export default function DebugChatModal() {
     providers,
     setDebugChatOpen,
     updateProvider,
+    recordModelTokenUsage,
+    setLiveModelTokenUsage,
+    clearLiveModelTokenUsage,
   } = useStore();
 
   const [chatModelId, setChatModelId] = useState('');
@@ -286,6 +292,13 @@ export default function DebugChatModal() {
   const [probeProgress, setProbeProgress] = useState<{ done: number; total: number; current?: string } | null>(null);
   const [selectedProbeCell, setSelectedProbeCell] = useState<{ modelId: string; caseId: string } | null>(null);
   const renderTimerRef = useRef<number | null>(null);
+  const liveUsageTargetRef = useRef<{ keyId: string; modelId: string } | null>(null);
+  const pendingFinalUsageRef = useRef<{
+    providerId: string;
+    keyId: string;
+    modelId: string;
+    usage?: Record<string, unknown>;
+  } | null>(null);
 
   const key = debugChatKeyId ? getKeyById(debugChatKeyId) : null;
   const models = key?.models || [];
@@ -399,14 +412,40 @@ export default function DebugChatModal() {
         window.clearInterval(renderTimerRef.current);
         renderTimerRef.current = null;
       }
+      const liveTarget = liveUsageTargetRef.current;
+      if (liveTarget) {
+        clearLiveModelTokenUsage(liveTarget.keyId, liveTarget.modelId);
+        liveUsageTargetRef.current = null;
+      }
+      const pending = pendingFinalUsageRef.current;
+      if (pending) {
+        recordModelTokenUsage(pending.providerId, pending.keyId, pending.modelId, pending.usage);
+        pendingFinalUsageRef.current = null;
+      }
     };
-  }, []);
+  }, [clearLiveModelTokenUsage, recordModelTokenUsage]);
+
+  const clearLiveUsageTarget = () => {
+    const liveTarget = liveUsageTargetRef.current;
+    if (!liveTarget) return;
+    clearLiveModelTokenUsage(liveTarget.keyId, liveTarget.modelId);
+    liveUsageTargetRef.current = null;
+  };
+
+  const flushPendingFinalUsage = () => {
+    const pending = pendingFinalUsageRef.current;
+    if (!pending) return;
+    recordModelTokenUsage(pending.providerId, pending.keyId, pending.modelId, pending.usage);
+    pendingFinalUsageRef.current = null;
+  };
 
   const handleClose = () => {
     if (renderTimerRef.current) {
       window.clearInterval(renderTimerRef.current);
       renderTimerRef.current = null;
     }
+    clearLiveUsageTarget();
+    flushPendingFinalUsage();
     setDebugChatOpen(false, null);
     setChatInput('');
     setLatestResult(null);
@@ -417,7 +456,13 @@ export default function DebugChatModal() {
     setProbeProgress(null);
   };
 
-  const startStreamingRender = (fullText: string) => {
+  const startStreamingRender = (
+    fullText: string,
+    hooks?: {
+      onProgress?: (renderedText: string, progress: number) => void;
+      onDone?: () => void;
+    },
+  ) => {
     if (renderTimerRef.current) {
       window.clearInterval(renderTimerRef.current);
       renderTimerRef.current = null;
@@ -426,6 +471,8 @@ export default function DebugChatModal() {
     if (!fullText) {
       setStreamedResponse('');
       setIsRenderingStream(false);
+      hooks?.onProgress?.('', 1);
+      hooks?.onDone?.();
       return;
     }
 
@@ -437,7 +484,10 @@ export default function DebugChatModal() {
 
     renderTimerRef.current = window.setInterval(() => {
       index += 1;
-      setStreamedResponse(chunks.slice(0, index).join(''));
+      const next = chunks.slice(0, index).join('');
+      const progress = Math.min(1, index / chunks.length);
+      setStreamedResponse(next);
+      hooks?.onProgress?.(next, progress);
 
       if (index >= chunks.length) {
         if (renderTimerRef.current) {
@@ -445,6 +495,7 @@ export default function DebugChatModal() {
           renderTimerRef.current = null;
         }
         setIsRenderingStream(false);
+        hooks?.onDone?.();
       }
     }, 18);
   };
@@ -462,6 +513,8 @@ export default function DebugChatModal() {
 
   const handleSendChat = async () => {
     if (!key || !provider || !chatModelId) return;
+    clearLiveUsageTarget();
+    flushPendingFinalUsage();
 
     const trimmedInput = chatInput.trim();
     const rawInput = trimmedInput ? chatInput : defaultDebugInputPrompt;
@@ -481,11 +534,12 @@ export default function DebugChatModal() {
     setIsChatLoading(true);
 
     try {
+      const requestModelId = chatModelId;
       const decryptedKey = await decryptApiKey(key.key);
       const result = await testModel(
         provider,
         decryptedKey,
-        chatModelId,
+        requestModelId,
         rawInput,
         undefined,
         requestSystemPrompt,
@@ -494,8 +548,75 @@ export default function DebugChatModal() {
       );
 
       setLatestResult({ ...result, timestamp: Date.now() });
-      startStreamingRender(result.response || '');
+
+      const normalizedUsage = normalizeTokenUsage(result.usage);
+      const responseText = result.response || '';
+      if (normalizedUsage && responseText) {
+        const inputTokens = Math.max(0, normalizedUsage.inputTokens);
+        const outputTokensFinal = Math.max(0, normalizedUsage.outputTokens);
+        const totalTokensFinal = Math.max(
+          normalizedUsage.totalTokens,
+          inputTokens + outputTokensFinal,
+        );
+        const nonInputTotalFinal = Math.max(0, totalTokensFinal - inputTokens);
+        let lastLiveOutput = -1;
+        let lastLiveUpdatedAt = 0;
+
+        liveUsageTargetRef.current = { keyId: key.id, modelId: requestModelId };
+        pendingFinalUsageRef.current = {
+          providerId: provider.id,
+          keyId: key.id,
+          modelId: requestModelId,
+          usage: result.usage,
+        };
+        setLiveModelTokenUsage(provider.id, key.id, requestModelId, {
+          inputTokens,
+          outputTokens: 0,
+          totalTokens: inputTokens,
+        });
+
+        startStreamingRender(responseText, {
+          onProgress: (_, progress) => {
+            const now = Date.now();
+            const nextOutputTokens = Math.min(outputTokensFinal, Math.round(outputTokensFinal * progress));
+            if (
+              nextOutputTokens === lastLiveOutput
+              && progress < 1
+              && now - lastLiveUpdatedAt < STREAM_USAGE_UPDATE_INTERVAL_MS
+            ) {
+              return;
+            }
+            lastLiveOutput = nextOutputTokens;
+            lastLiveUpdatedAt = now;
+            const nextTotalTokens = Math.min(
+              totalTokensFinal,
+              inputTokens + Math.round(nonInputTotalFinal * progress),
+            );
+            setLiveModelTokenUsage(provider.id, key.id, requestModelId, {
+              inputTokens,
+              outputTokens: nextOutputTokens,
+              totalTokens: nextTotalTokens,
+            });
+          },
+          onDone: () => {
+            clearLiveModelTokenUsage(key.id, requestModelId);
+            if (
+              liveUsageTargetRef.current
+              && liveUsageTargetRef.current.keyId === key.id
+              && liveUsageTargetRef.current.modelId === requestModelId
+            ) {
+              liveUsageTargetRef.current = null;
+            }
+            flushPendingFinalUsage();
+          },
+        });
+      } else {
+        recordModelTokenUsage(provider.id, key.id, requestModelId, result.usage);
+        startStreamingRender(responseText);
+      }
     } catch (error) {
+      clearLiveUsageTarget();
+      flushPendingFinalUsage();
       setLatestResult({
         status: 'error',
         message: t('apiTest.modelTestFailed'),
@@ -518,6 +639,8 @@ export default function DebugChatModal() {
 
   const handleRunProbe = async () => {
     if (!key || !provider) return;
+    clearLiveUsageTarget();
+    flushPendingFinalUsage();
 
     const targetModels = probeTargetModels;
     if (!targetModels.length) {
@@ -572,6 +695,7 @@ export default function DebugChatModal() {
             thinkingEnabled,
             modelProtocolOptions,
           );
+          recordModelTokenUsage(provider.id, key.id, model.id, result.usage);
 
           const evaluation = evaluateSecurityProbe({
             result,

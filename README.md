@@ -22,6 +22,7 @@ A cross-platform LLM gateway and debugging workbench — focused on protocol rou
 ## Features
 
 - **Provider management**: Add, edit, and delete AI providers (e.g. OpenAI, Anthropic)
+- **Codex Exec provider**: Use local `codex exec` as a provider for model testing and debug chat
 - **Key management**: Add multiple API keys per provider
 - **Expiry tracking**: Set expiration dates and automatically mark expired keys
 - **Quick copy**: One-click copy provider base URL and API keys

@@ -1,6 +1,21 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { GatewayRuntimeConfigFile } from './config-builder';
 
+export interface GatewayUsageEvent {
+  id: number;
+  timestamp: number;
+  providerId: string;
+  keyId: string;
+  modelId: string;
+  sourceModel: string;
+  targetModel: string;
+  route: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requestCount: number;
+}
+
 export interface GatewayProcessStatus {
   running: boolean;
   pid?: number;
@@ -9,6 +24,7 @@ export interface GatewayProcessStatus {
   listenPort?: number;
   configPath?: string;
   logs: string[];
+  usageEvents?: GatewayUsageEvent[];
   lastError?: string;
   lastExitCode?: number;
   lastExitAt?: number;

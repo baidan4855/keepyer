@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useStore } from '@/store';
 import ProviderSidebar from '@/domains/providers/components/ProviderSidebar';
 import ProviderDashboard from '@/domains/providers/components/ProviderDashboard';
 import GatewayDashboard from '@/domains/gateway/components/GatewayDashboard';
+import { getGatewayProcessStatus } from '@/domains/gateway/lib/gateway-runtime';
 import AddProviderModal from '@/domains/providers/components/AddProviderModal';
 import AddKeyModal from '@/domains/keys/components/AddKeyModal';
 import ModelsModal from '@/domains/keys/components/ModelsModal';
@@ -39,7 +40,15 @@ function normalizeNodeAndDescendants(node: Node): void {
 }
 
 function App() {
-  const { copiedItem, setCopiedItem, activePage } = useStore();
+  const {
+    copiedItem,
+    setCopiedItem,
+    activePage,
+    gatewayConfig,
+    recordModelTokenUsage,
+  } = useStore();
+  const lastGatewayStartedAtRef = useRef<number | null>(null);
+  const lastGatewayUsageEventIdRef = useRef(0);
 
   // 清除复制状态
   useEffect(() => {
@@ -69,6 +78,75 @@ function App() {
       observer.disconnect();
     };
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const syncGatewayUsage = async () => {
+      try {
+        const status = await getGatewayProcessStatus();
+        if (disposed) return;
+
+        const startedAt = typeof status.startedAt === 'number' ? status.startedAt : null;
+        if (startedAt !== lastGatewayStartedAtRef.current) {
+          lastGatewayStartedAtRef.current = startedAt;
+          lastGatewayUsageEventIdRef.current = 0;
+        }
+
+        const events = Array.isArray(status.usageEvents) ? [...status.usageEvents] : [];
+        if (!events.length) return;
+
+        events.sort((a, b) => a.id - b.id);
+        let nextLastId = lastGatewayUsageEventIdRef.current;
+
+        events.forEach((event) => {
+          if (!event || typeof event.id !== 'number' || event.id <= nextLastId) {
+            return;
+          }
+
+          let providerId = typeof event.providerId === 'string' ? event.providerId.trim() : '';
+          let keyId = typeof event.keyId === 'string' ? event.keyId.trim() : '';
+          let modelId = typeof event.modelId === 'string' ? event.modelId.trim() : '';
+          const sourceModel = typeof event.sourceModel === 'string' ? event.sourceModel.trim() : '';
+          const targetModel = typeof event.targetModel === 'string' ? event.targetModel.trim() : '';
+
+          if (!providerId || !keyId || !modelId) {
+            const fallbackMapping = (sourceModel && gatewayConfig.modelMappings[sourceModel])
+              || gatewayConfig.modelMappings['*'];
+            if (fallbackMapping) {
+              providerId = providerId || fallbackMapping.providerId;
+              keyId = keyId || fallbackMapping.keyId;
+              modelId = modelId || fallbackMapping.targetModel?.trim() || targetModel || sourceModel;
+            }
+          }
+
+          if (providerId && keyId && modelId) {
+            recordModelTokenUsage(providerId, keyId, modelId, {
+              input_tokens: Math.max(0, Math.floor(event.inputTokens || 0)),
+              output_tokens: Math.max(0, Math.floor(event.outputTokens || 0)),
+              total_tokens: Math.max(0, Math.floor(event.totalTokens || 0)),
+              request_count: Math.max(1, Math.floor(event.requestCount || 1)),
+              usage_source: 'gateway_proxy',
+            });
+          }
+
+          nextLastId = Math.max(nextLastId, event.id);
+        });
+
+        lastGatewayUsageEventIdRef.current = nextLastId;
+      } catch (_error) {
+        // 网关未启动或状态读取失败时静默忽略，等待下一轮轮询
+      }
+    };
+
+    void syncGatewayUsage();
+    const timer = window.setInterval(() => void syncGatewayUsage(), 2000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [gatewayConfig.modelMappings, recordModelTokenUsage]);
 
   return (
     <div className="flex h-screen overflow-hidden">

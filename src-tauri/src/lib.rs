@@ -24,6 +24,8 @@ pub fn run() {
             has_password,
             change_password,
             http_request,
+            codex_exec,
+            get_codex_cli_status,
             get_gateway_process_status,
             start_gateway_process,
             stop_gateway_process,
@@ -45,17 +47,19 @@ use axum::{
     routing::any,
     Router,
 };
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
+use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
+use tokio::process::Command;
 use tokio::sync::oneshot;
 
 #[derive(Serialize, Deserialize)]
@@ -64,11 +68,47 @@ struct EncryptedData {
     ciphertext: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexExecResult {
+    success: bool,
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+    output: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexCliStatus {
+    installed: bool,
+    version: Option<String>,
+    message: Option<String>,
+}
+
 const KEY_FILE: &str = "master_key.bin";
 const PASSWORD_FILE: &str = "password_hash.bin";
 const GATEWAY_CONFIG_FILE: &str = "gateway.runtime.config.json";
 const GATEWAY_LOG_LIMIT: usize = 400;
+const GATEWAY_USAGE_EVENT_LIMIT: usize = 2000;
 const MAX_GATEWAY_BODY_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayUsageEvent {
+    id: u64,
+    timestamp: u64,
+    provider_id: String,
+    key_id: String,
+    model_id: String,
+    source_model: String,
+    target_model: String,
+    route: String,
+    input_tokens: i64,
+    output_tokens: i64,
+    total_tokens: i64,
+    request_count: i64,
+}
 
 #[derive(Default)]
 struct GatewayProcessState {
@@ -79,6 +119,8 @@ struct GatewayProcessState {
     listen_port: Option<u16>,
     config_path: Option<String>,
     logs: VecDeque<String>,
+    usage_events: VecDeque<GatewayUsageEvent>,
+    next_usage_event_id: u64,
     last_error: Option<String>,
     last_exit_code: Option<i32>,
     last_exit_at: Option<u64>,
@@ -96,6 +138,7 @@ struct GatewayProcessStatus {
     listen_port: Option<u16>,
     config_path: Option<String>,
     logs: Vec<String>,
+    usage_events: Vec<GatewayUsageEvent>,
     last_error: Option<String>,
     last_exit_code: Option<i32>,
     last_exit_at: Option<u64>,
@@ -113,6 +156,7 @@ struct GatewayRuntimeListen {
 enum GatewayRouteProtocol {
     Anthropic,
     Openai,
+    Codex,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -121,6 +165,10 @@ struct GatewayRuntimeRouteConfig {
     protocol: GatewayRouteProtocol,
     base_url: String,
     api_key: String,
+    #[serde(default)]
+    provider_id: Option<String>,
+    #[serde(default)]
+    key_id: Option<String>,
     anthropic_version: Option<String>,
 }
 
@@ -185,6 +233,13 @@ fn push_gateway_log(state: &mut GatewayProcessState, line: String) {
     }
 }
 
+fn push_gateway_usage_event(state: &mut GatewayProcessState, event: GatewayUsageEvent) {
+    state.usage_events.push_back(event);
+    while state.usage_events.len() > GATEWAY_USAGE_EVENT_LIMIT {
+        state.usage_events.pop_front();
+    }
+}
+
 fn build_gateway_status(state: &GatewayProcessState) -> GatewayProcessStatus {
     GatewayProcessStatus {
         running: state.running,
@@ -194,6 +249,7 @@ fn build_gateway_status(state: &GatewayProcessState) -> GatewayProcessStatus {
         listen_port: state.listen_port,
         config_path: state.config_path.clone(),
         logs: state.logs.iter().cloned().collect(),
+        usage_events: state.usage_events.iter().cloned().collect(),
         last_error: state.last_error.clone(),
         last_exit_code: state.last_exit_code,
         last_exit_at: state.last_exit_at,
@@ -207,8 +263,7 @@ fn refresh_gateway_state(state: &mut GatewayProcessState) {
 /// 获取应用数据目录
 fn get_app_data_dir() -> Result<PathBuf, String> {
     // 使用跨平台的方式获取应用数据目录
-    let home_dir = dirs::home_dir()
-        .ok_or_else(|| "Failed to find home directory".to_string())?;
+    let home_dir = dirs::home_dir().ok_or_else(|| "Failed to find home directory".to_string())?;
 
     let app_data_dir = if cfg!(target_os = "macos") {
         home_dir.join("Library/Application Support/com.keeyper.app")
@@ -232,10 +287,9 @@ fn get_or_create_master_key() -> Result<Vec<u8>, String> {
     } else {
         // 创建新的主密钥
         let key: [u8; 32] = rand::thread_rng().gen();
-        fs::create_dir_all(&data_dir)
-            .map_err(|e| format!("Failed to create data dir: {}", e))?;
-        let mut file = fs::File::create(&key_path)
-            .map_err(|e| format!("Failed to create key file: {}", e))?;
+        fs::create_dir_all(&data_dir).map_err(|e| format!("Failed to create data dir: {}", e))?;
+        let mut file =
+            fs::File::create(&key_path).map_err(|e| format!("Failed to create key file: {}", e))?;
         file.write_all(&key)
             .map_err(|e| format!("Failed to write key: {}", e))?;
         Ok(key.to_vec())
@@ -257,8 +311,8 @@ fn derive_key_from_password(password: &str, salt: &[u8; 12]) -> Vec<u8> {
 #[tauri::command]
 fn encrypt_data(data: String) -> Result<String, String> {
     let key = get_or_create_master_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Failed to create cipher: {}", e))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to create cipher: {}", e))?;
 
     let nonce: [u8; 12] = rand::thread_rng().gen();
     let nonce = Nonce::from_slice(&nonce);
@@ -272,19 +326,21 @@ fn encrypt_data(data: String) -> Result<String, String> {
         ciphertext: general_purpose::STANDARD.encode(&ciphertext),
     };
 
-    serde_json::to_string(&encrypted)
-        .map_err(|e| format!("Failed to serialize: {}", e))
+    serde_json::to_string(&encrypted).map_err(|e| format!("Failed to serialize: {}", e))
 }
 
 /// 解密数据
 #[tauri::command]
 fn decrypt_data(encrypted_data: String) -> Result<String, String> {
     println!("收到解密请求，数据长度: {}", encrypted_data.len());
-    println!("数据前50字符: {}", &encrypted_data.chars().take(50).collect::<String>());
+    println!(
+        "数据前50字符: {}",
+        &encrypted_data.chars().take(50).collect::<String>()
+    );
 
     let key = get_or_create_master_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Failed to create cipher: {}", e))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to create cipher: {}", e))?;
 
     let encrypted: EncryptedData = serde_json::from_str(&encrypted_data)
         .map_err(|e| format!("Failed to deserialize: {}", e))?;
@@ -292,11 +348,13 @@ fn decrypt_data(encrypted_data: String) -> Result<String, String> {
     println!("nonce 长度: {}", encrypted.nonce.len());
     println!("ciphertext 长度: {}", encrypted.ciphertext.len());
 
-    let nonce_bytes = general_purpose::STANDARD.decode(&encrypted.nonce)
+    let nonce_bytes = general_purpose::STANDARD
+        .decode(&encrypted.nonce)
         .map_err(|e| format!("Failed to decode nonce: {}", e))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let ciphertext = general_purpose::STANDARD.decode(&encrypted.ciphertext)
+    let ciphertext = general_purpose::STANDARD
+        .decode(&encrypted.ciphertext)
         .map_err(|e| format!("Failed to decode ciphertext: {}", e))?;
 
     println!("密文长度: {} bytes", ciphertext.len());
@@ -305,11 +363,14 @@ fn decrypt_data(encrypted_data: String) -> Result<String, String> {
         .decrypt(nonce, ciphertext.as_ref())
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
-    let result = String::from_utf8(plaintext.to_vec())
-        .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+    let result =
+        String::from_utf8(plaintext.to_vec()).map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
     println!("解密结果长度: {}", result.len());
-    println!("解密结果前50字符: {}", &result.chars().take(50).collect::<String>());
+    println!(
+        "解密结果前50字符: {}",
+        &result.chars().take(50).collect::<String>()
+    );
 
     Ok(result)
 }
@@ -325,15 +386,14 @@ fn setup_password(password: String) -> Result<(), String> {
     let key = derive_key_from_password(&password, &salt);
 
     // 存储盐值和派生密钥的哈希（用于验证）
-    let hash = format!("{}:{}",
+    let hash = format!(
+        "{}:{}",
         general_purpose::STANDARD.encode(&salt),
         general_purpose::STANDARD.encode(&key[..16]) // 存储部分派生密钥作为验证
     );
 
-    fs::create_dir_all(&data_dir)
-        .map_err(|e| format!("Failed to create data dir: {}", e))?;
-    fs::write(&password_path, hash)
-        .map_err(|e| format!("Failed to write password: {}", e))?;
+    fs::create_dir_all(&data_dir).map_err(|e| format!("Failed to create data dir: {}", e))?;
+    fs::write(&password_path, hash).map_err(|e| format!("Failed to write password: {}", e))?;
 
     Ok(())
 }
@@ -356,16 +416,19 @@ fn verify_password(password: String) -> Result<bool, String> {
         return Err("Corrupted password data".to_string());
     }
 
-    let salt = general_purpose::STANDARD.decode(&parts[0])
+    let salt = general_purpose::STANDARD
+        .decode(&parts[0])
         .map_err(|e| format!("Failed to decode salt: {}", e))?;
-    let salt_array: [u8; 12] = salt.try_into()
+    let salt_array: [u8; 12] = salt
+        .try_into()
         .map_err(|_| "Invalid salt length".to_string())?;
 
     let key = derive_key_from_password(&password, &salt_array);
     let stored_hash = parts[1];
 
     // 解码存储的哈希值进行比较
-    let stored_hash_bytes = general_purpose::STANDARD.decode(&stored_hash)
+    let stored_hash_bytes = general_purpose::STANDARD
+        .decode(&stored_hash)
         .map_err(|e| format!("Failed to decode hash: {}", e))?;
 
     Ok(&key[..16] == stored_hash_bytes.as_slice())
@@ -428,7 +491,9 @@ async fn http_request(
 
     // 添加请求头
     if let Some(headers_json) = headers {
-        if let Ok(headers_map) = serde_json::from_str::<std::collections::HashMap<String, String>>(&headers_json) {
+        if let Ok(headers_map) =
+            serde_json::from_str::<std::collections::HashMap<String, String>>(&headers_json)
+        {
             for (key, value) in headers_map {
                 request_builder = request_builder.header(&key, &value);
             }
@@ -452,11 +517,15 @@ async fn http_request(
             Ok(response) => {
                 let status = response.status();
                 let status_code = status.as_u16();
-                let headers = response.headers().iter()
+                let headers = response
+                    .headers()
+                    .iter()
                     .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect::<std::collections::HashMap<String, String>>();
 
-                let body_bytes = response.bytes().await
+                let body_bytes = response
+                    .bytes()
+                    .await
                     .map_err(|e| format!("读取响应失败: {}", e))?;
                 let body_text = String::from_utf8(body_bytes.to_vec())
                     .map_err(|e| format!("响应不是有效的 UTF-8: {}", e))?;
@@ -486,9 +555,200 @@ async fn http_request(
     Err(last_error)
 }
 
+fn should_retry_with_reasoning_override(stderr: &str) -> bool {
+    let lower = stderr.to_lowercase();
+    lower.contains("model_reasoning_effort") && lower.contains("unknown variant")
+}
+
+async fn run_codex_command(
+    prompt: &str,
+    model: Option<&str>,
+    profile: Option<&str>,
+    working_dir: Option<&str>,
+    timeout: Duration,
+    force_reasoning_override: bool,
+) -> Result<Output, String> {
+    let mut command = Command::new("codex");
+    command.arg("exec");
+    command.arg("--skip-git-repo-check");
+    command.arg("--color").arg("never");
+
+    if force_reasoning_override {
+        command.arg("-c").arg(r#"model_reasoning_effort="high""#);
+    }
+
+    if let Some(model_name) = model {
+        command.arg("-m").arg(model_name);
+    }
+
+    if let Some(profile_name) = profile {
+        command.arg("-p").arg(profile_name);
+    }
+
+    if let Some(dir) = working_dir {
+        command.arg("-C").arg(dir);
+    }
+
+    command.arg(prompt);
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(result) => result.map_err(|e| format!("codex exec failed: {}", e)),
+        Err(_) => Err(format!(
+            "codex exec timed out after {} ms",
+            timeout.as_millis()
+        )),
+    }
+}
+
+#[tauri::command]
+async fn codex_exec(
+    prompt: String,
+    model: Option<String>,
+    profile: Option<String>,
+    working_dir: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<CodexExecResult, String> {
+    let normalized_prompt = prompt.trim();
+    if normalized_prompt.is_empty() {
+        return Err("Prompt cannot be empty".to_string());
+    }
+
+    let normalized_model = model
+        .as_ref()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let normalized_profile = profile
+        .as_ref()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let normalized_working_dir = working_dir
+        .as_ref()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(240_000).max(1_000));
+    let mut output = run_codex_command(
+        normalized_prompt,
+        normalized_model.as_deref(),
+        normalized_profile.as_deref(),
+        normalized_working_dir.as_deref(),
+        timeout,
+        false,
+    )
+    .await?;
+
+    if !output.status.success() {
+        let first_stderr = String::from_utf8_lossy(&output.stderr);
+        if should_retry_with_reasoning_override(&first_stderr) {
+            output = run_codex_command(
+                normalized_prompt,
+                normalized_model.as_deref(),
+                normalized_profile.as_deref(),
+                normalized_working_dir.as_deref(),
+                timeout,
+                true,
+            )
+            .await?;
+        }
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let output_text = if !stdout.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        stderr.trim().to_string()
+    };
+
+    Ok(CodexExecResult {
+        success: output.status.success(),
+        exit_code: output
+            .status
+            .code()
+            .unwrap_or(if output.status.success() { 0 } else { 1 }),
+        stdout,
+        stderr,
+        output: output_text,
+    })
+}
+
+#[tauri::command]
+async fn get_codex_cli_status() -> Result<CodexCliStatus, String> {
+    let output = Command::new("codex")
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await;
+
+    match output {
+        Ok(result) => {
+            let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+
+            let version = if !stdout.is_empty() {
+                Some(stdout.clone())
+            } else if !stderr.is_empty() {
+                Some(stderr.clone())
+            } else {
+                None
+            };
+
+            let message = if result.status.success() {
+                None
+            } else if !stderr.is_empty() {
+                Some(stderr)
+            } else if !stdout.is_empty() {
+                Some(stdout)
+            } else {
+                Some(format!("codex --version exited with status {}", result.status))
+            };
+
+            Ok(CodexCliStatus {
+                installed: true,
+                version,
+                message,
+            })
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(CodexCliStatus {
+            installed: false,
+            version: None,
+            message: Some("codex command not found in PATH".to_string()),
+        }),
+        Err(error) => Err(format!("Failed to check codex CLI: {}", error)),
+    }
+}
+
 fn push_gateway_log_shared(shared_state: &Arc<Mutex<GatewayProcessState>>, line: String) {
     if let Ok(mut state) = shared_state.lock() {
         push_gateway_log(&mut state, line);
+    }
+}
+
+fn push_gateway_usage_event_shared(
+    shared_state: &Arc<Mutex<GatewayProcessState>>,
+    mut event: GatewayUsageEvent,
+) {
+    if event.input_tokens < 0 {
+        event.input_tokens = 0;
+    }
+    if event.output_tokens < 0 {
+        event.output_tokens = 0;
+    }
+    let computed_total = event.input_tokens + event.output_tokens;
+    if event.total_tokens < computed_total {
+        event.total_tokens = computed_total;
+    }
+    if event.request_count <= 0 {
+        event.request_count = 1;
+    }
+
+    if let Ok(mut state) = shared_state.lock() {
+        state.next_usage_event_id = state.next_usage_event_id.saturating_add(1);
+        event.id = state.next_usage_event_id;
+        push_gateway_usage_event(&mut state, event);
     }
 }
 
@@ -597,7 +857,11 @@ fn parse_json_body(body: &Bytes) -> Result<Value, String> {
     serde_json::from_slice::<Value>(body).map_err(|_| "Invalid JSON body".to_string())
 }
 
-fn json_response_with_headers(status: StatusCode, payload: Value, extra_headers: &HeaderMap) -> Response {
+fn json_response_with_headers(
+    status: StatusCode,
+    payload: Value,
+    extra_headers: &HeaderMap,
+) -> Response {
     let mut response = Response::new(Body::from(payload.to_string()));
     *response.status_mut() = status;
     response.headers_mut().insert(
@@ -655,6 +919,102 @@ fn extract_error_message(payload: &Value) -> Option<String> {
         })
 }
 
+fn extract_openai_usage(payload: &Value) -> Option<(i64, i64, i64)> {
+    let usage = payload.get("usage")?;
+    let input_tokens = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0);
+    let output_tokens = usage
+        .get("completion_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(input_tokens + output_tokens)
+        .max(input_tokens + output_tokens)
+        .max(0);
+    if input_tokens <= 0 && output_tokens <= 0 && total_tokens <= 0 {
+        return None;
+    }
+    Some((input_tokens, output_tokens, total_tokens))
+}
+
+fn extract_anthropic_usage(payload: &Value) -> Option<(i64, i64, i64)> {
+    let usage = payload.get("usage")?;
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(input_tokens + output_tokens)
+        .max(input_tokens + output_tokens)
+        .max(0);
+    if input_tokens <= 0 && output_tokens <= 0 && total_tokens <= 0 {
+        return None;
+    }
+    Some((input_tokens, output_tokens, total_tokens))
+}
+
+fn record_gateway_usage(
+    ctx: &GatewayServerContext,
+    route: &ResolvedRoute,
+    mapping: &ResolvedModelMapping,
+    usage: (i64, i64, i64),
+) {
+    let provider_id = route
+        .config
+        .provider_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let key_id = route
+        .config
+        .key_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let model_id = if mapping.target_model.trim().is_empty() {
+        mapping.requested_model.trim()
+    } else {
+        mapping.target_model.trim()
+    };
+    if model_id.is_empty() {
+        return;
+    }
+
+    push_gateway_usage_event_shared(
+        &ctx.shared_state,
+        GatewayUsageEvent {
+            id: 0,
+            timestamp: now_millis(),
+            provider_id,
+            key_id,
+            model_id: model_id.to_string(),
+            source_model: mapping.requested_model.clone(),
+            target_model: mapping.target_model.clone(),
+            route: route.name.clone(),
+            input_tokens: usage.0,
+            output_tokens: usage.1,
+            total_tokens: usage.2,
+            request_count: 1,
+        },
+    );
+}
+
 fn random_id(prefix: &str) -> String {
     let suffix = rand::thread_rng().gen::<u64>();
     format!("{}_{}_{suffix:016x}", prefix, now_millis())
@@ -688,10 +1048,7 @@ fn anthropic_content_to_text(content: &Value) -> String {
             if let Some(text) = block.as_str() {
                 return Some(text.to_string());
             }
-            block
-                .get("text")
-                .and_then(Value::as_str)
-                .map(String::from)
+            block.get("text").and_then(Value::as_str).map(String::from)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -751,14 +1108,9 @@ fn convert_anthropic_messages_to_openai(messages: &Value) -> Vec<Value> {
                         .and_then(Value::as_str)
                         .map(String::from)
                         .unwrap_or_else(|| format!("call_{}", random_id("tool")));
-                    let name = block
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("tool");
-                    let args_json = serde_json::to_string(
-                        block.get("input").unwrap_or(&json!({})),
-                    )
-                    .unwrap_or_else(|_| "{}".to_string());
+                    let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
+                    let args_json = serde_json::to_string(block.get("input").unwrap_or(&json!({})))
+                        .unwrap_or_else(|_| "{}".to_string());
                     tool_calls.push(json!({
                         "id": call_id,
                         "type": "function",
@@ -908,21 +1260,19 @@ fn convert_anthropic_tool_choice_to_openai(tool_choice: &Value) -> Option<Value>
         "auto" => Some(json!("auto")),
         "any" => Some(json!("required")),
         "none" => Some(json!("none")),
-        "tool" => choice
-            .get("name")
-            .and_then(Value::as_str)
-            .map(|name| {
-                json!({
-                    "type": "function",
-                    "function": { "name": name }
-                })
-            }),
+        "tool" => choice.get("name").and_then(Value::as_str).map(|name| {
+            json!({
+                "type": "function",
+                "function": { "name": name }
+            })
+        }),
         _ => None,
     }
 }
 
 fn convert_anthropic_request_to_openai(payload: &Value, target_model: &str) -> Value {
-    let mut messages = convert_anthropic_messages_to_openai(payload.get("messages").unwrap_or(&Value::Null));
+    let mut messages =
+        convert_anthropic_messages_to_openai(payload.get("messages").unwrap_or(&Value::Null));
     let system_text = normalize_anthropic_system(payload.get("system").unwrap_or(&Value::Null));
     if !system_text.is_empty() {
         messages.insert(0, json!({ "role": "system", "content": system_text }));
@@ -948,7 +1298,9 @@ fn convert_anthropic_request_to_openai(payload: &Value, target_model: &str) -> V
             output.insert("stop".to_string(), stop_sequences.clone());
         }
     }
-    if let Some(tools) = convert_anthropic_tools_to_openai(payload.get("tools").unwrap_or(&Value::Null)) {
+    if let Some(tools) =
+        convert_anthropic_tools_to_openai(payload.get("tools").unwrap_or(&Value::Null))
+    {
         output.insert("tools".to_string(), tools);
     }
     if let Some(tool_choice) =
@@ -1054,8 +1406,15 @@ fn convert_openai_response_to_anthropic(openai_payload: &Value, requested_model:
         content_blocks.push(json!({"type":"text","text":""}));
     }
 
-    let usage = openai_payload.get("usage").cloned().unwrap_or_else(|| json!({}));
-    let input_tokens = usage.get("prompt_tokens").and_then(Value::as_i64).unwrap_or(0).max(0);
+    let usage = openai_payload
+        .get("usage")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let input_tokens = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0);
     let output_tokens = usage
         .get("completion_tokens")
         .and_then(Value::as_i64)
@@ -1172,7 +1531,11 @@ fn stream_anthropic_message(message_payload: &Value) -> String {
             continue;
         }
 
-        let text = block.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+        let text = block
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         write_sse_event(
             &mut output,
             "content_block_start",
@@ -1227,7 +1590,11 @@ fn stream_anthropic_message(message_payload: &Value) -> String {
           }
         }),
     );
-    write_sse_event(&mut output, "message_stop", &json!({ "type": "message_stop" }));
+    write_sse_event(
+        &mut output,
+        "message_stop",
+        &json!({ "type": "message_stop" }),
+    );
 
     output
 }
@@ -1241,7 +1608,157 @@ fn estimate_input_tokens(payload: &Value) -> i64 {
     std::cmp::max(1, (serialized.len() as i64 + 3) / 4)
 }
 
-fn resolve_model_mapping(config: &GatewayRuntimeConfig, requested_model: &str) -> Result<ResolvedModelMapping, String> {
+fn estimate_openai_input_tokens(payload: &Value) -> i64 {
+    let relevant = json!({
+      "messages": payload.get("messages").cloned().unwrap_or(Value::Null),
+      "tools": payload.get("tools").cloned().unwrap_or(Value::Null),
+      "tool_choice": payload.get("tool_choice").cloned().unwrap_or(Value::Null),
+    });
+    let serialized = serde_json::to_string(&relevant).unwrap_or_default();
+    std::cmp::max(1, (serialized.len() as i64 + 3) / 4)
+}
+
+fn estimate_text_tokens(text: &str) -> i64 {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    std::cmp::max(1, (trimmed.chars().count() as i64 + 3) / 4)
+}
+
+fn build_codex_prompt_from_openai_payload(payload: &Value) -> String {
+    let Some(messages) = payload.get("messages").and_then(Value::as_array) else {
+        return String::new();
+    };
+
+    let mut blocks = Vec::new();
+    for item in messages {
+        let Some(message) = item.as_object() else {
+            continue;
+        };
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user")
+            .trim();
+        let content = extract_openai_message_text(message.get("content").unwrap_or(&Value::Null));
+        if content.trim().is_empty() {
+            continue;
+        }
+        blocks.push(format!(
+            "<{}>\n{}\n</{}>",
+            role,
+            content.trim(),
+            role
+        ));
+    }
+
+    blocks.join("\n\n")
+}
+
+fn resolve_codex_working_dir(route: &ResolvedRoute) -> Option<String> {
+    let trimmed = route.config.base_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+async fn run_codex_gateway_completion(
+    openai_payload: &Value,
+    mapping: &ResolvedModelMapping,
+    route: &ResolvedRoute,
+) -> Result<Value, String> {
+    let prompt = {
+        let built = build_codex_prompt_from_openai_payload(openai_payload);
+        if built.trim().is_empty() {
+            "Reply to the user request directly.".to_string()
+        } else {
+            built
+        }
+    };
+    let timeout = Duration::from_millis(240_000);
+    let model = mapping.target_model.trim();
+    let model_arg = if model.is_empty() { None } else { Some(model) };
+    let working_dir = resolve_codex_working_dir(route);
+
+    let mut output = run_codex_command(
+        &prompt,
+        model_arg,
+        None,
+        working_dir.as_deref(),
+        timeout,
+        false,
+    )
+    .await?;
+
+    if !output.status.success() {
+        let first_stderr = String::from_utf8_lossy(&output.stderr);
+        if should_retry_with_reasoning_override(&first_stderr) {
+            output = run_codex_command(
+                &prompt,
+                model_arg,
+                None,
+                working_dir.as_deref(),
+                timeout,
+                true,
+            )
+            .await?;
+        }
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let completion_text = if !stdout.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        stderr.trim().to_string()
+    };
+
+    if !output.status.success() {
+        let error_text = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else if !stdout.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            format!("codex exec exited with status {}", output.status)
+        };
+        return Err(format!("Codex route failed: {}", error_text));
+    }
+
+    let prompt_tokens = estimate_openai_input_tokens(openai_payload).max(0);
+    let completion_tokens = estimate_text_tokens(&completion_text).max(0);
+    let total_tokens = prompt_tokens + completion_tokens;
+
+    Ok(json!({
+      "id": random_id("chatcmpl"),
+      "object": "chat.completion",
+      "created": (now_millis() / 1000) as i64,
+      "model": if model.is_empty() { mapping.requested_model.clone() } else { mapping.target_model.clone() },
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": completion_text
+        },
+        "finish_reason": "stop"
+      }],
+      "usage": {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens
+      }
+    }))
+}
+
+fn resolve_model_mapping(
+    config: &GatewayRuntimeConfig,
+    requested_model: &str,
+) -> Result<ResolvedModelMapping, String> {
     if let Some(mapping) = config.model_mappings.get(requested_model) {
         let target_model = if mapping.target_model.trim().is_empty() {
             requested_model.to_string()
@@ -1282,9 +1799,16 @@ fn resolve_model_mapping(config: &GatewayRuntimeConfig, requested_model: &str) -
     })
 }
 
-fn resolve_route(config: &GatewayRuntimeConfig, route_name: &str, model: &str) -> Result<ResolvedRoute, String> {
+fn resolve_route(
+    config: &GatewayRuntimeConfig,
+    route_name: &str,
+    model: &str,
+) -> Result<ResolvedRoute, String> {
     let Some(route) = config.routes.get(route_name) else {
-        return Err(format!("Route \"{}\" not found for model \"{}\"", route_name, model));
+        return Err(format!(
+            "Route \"{}\" not found for model \"{}\"",
+            route_name, model
+        ));
     };
     Ok(ResolvedRoute {
         name: route_name.to_string(),
@@ -1310,7 +1834,10 @@ async fn fetch_anthropic_upstream(
     let api_key = route_api_key(route)?;
     let upstream_url = join_url(&route.config.base_url, path)?;
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(reqwest::header::CONTENT_TYPE, reqwest::header::HeaderValue::from_static("application/json"));
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
     let api_key_header = reqwest::header::HeaderValue::from_str(&api_key)
         .map_err(|e| format!("Invalid route API key header value: {}", e))?;
     headers.insert("x-api-key", api_key_header.clone());
@@ -1364,7 +1891,10 @@ async fn fetch_openai_upstream(
     let upstream_url = join_url(&route.config.base_url, path)?;
 
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(reqwest::header::CONTENT_TYPE, reqwest::header::HeaderValue::from_static("application/json"));
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
     headers.insert(
         reqwest::header::AUTHORIZATION,
         reqwest::header::HeaderValue::from_str(&format!("Bearer {}", api_key))
@@ -1433,10 +1963,18 @@ async fn gateway_models_handler(
     headers: HeaderMap,
 ) -> Response {
     if method != Method::GET {
-        return anthropic_error_response(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed", "invalid_request_error");
+        return anthropic_error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Method Not Allowed",
+            "invalid_request_error",
+        );
     }
     if !check_gateway_auth(&headers, &ctx.config) {
-        return anthropic_error_response(StatusCode::UNAUTHORIZED, "Invalid gateway token", "authentication_error");
+        return anthropic_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Invalid gateway token",
+            "authentication_error",
+        );
     }
     let models = build_model_list(&ctx.config);
     json_response_with_headers(
@@ -1460,15 +1998,32 @@ async fn handle_anthropic_messages(
 ) -> Response {
     let mut upstream_payload = payload.clone();
     if let Some(obj) = upstream_payload.as_object_mut() {
-        obj.insert("model".to_string(), Value::String(mapping.target_model.clone()));
+        obj.insert(
+            "model".to_string(),
+            Value::String(mapping.target_model.clone()),
+        );
     }
-    let stream = payload.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    let upstream = match fetch_anthropic_upstream(ctx, route, headers, "/v1/messages", &upstream_payload).await {
+    let stream = payload
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let upstream = match fetch_anthropic_upstream(
+        ctx,
+        route,
+        headers,
+        "/v1/messages",
+        &upstream_payload,
+    )
+    .await
+    {
         Ok(resp) => resp,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error"),
+        Err(error) => {
+            return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error")
+        }
     };
 
-    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let passthrough_headers = copy_relevant_headers(upstream.headers());
 
     if stream {
@@ -1507,6 +2062,11 @@ async fn handle_anthropic_messages(
         .text()
         .await
         .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Failed to read upstream response\"}}".to_string());
+    if let Ok(parsed) = serde_json::from_str::<Value>(&body_text) {
+        if let Some(usage) = extract_anthropic_usage(&parsed) {
+            record_gateway_usage(ctx, route, mapping, usage);
+        }
+    }
     let mut response = Response::new(Body::from(body_text));
     *response.status_mut() = status;
     for (name, value) in &passthrough_headers {
@@ -1526,34 +2086,68 @@ async fn handle_openai_messages(
     route: &ResolvedRoute,
 ) -> Response {
     let openai_payload = convert_anthropic_request_to_openai(payload, &mapping.target_model);
-    let upstream = match fetch_openai_upstream(ctx, route, "/v1/chat/completions", &openai_payload).await {
-        Ok(resp) => resp,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error"),
-    };
-    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let passthrough_headers = copy_relevant_headers(upstream.headers());
-    let upstream_text = match upstream.text().await {
-        Ok(text) => text,
-        Err(error) => {
-            return anthropic_error_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("Failed to read upstream response: {}", error),
-                "api_error",
-            )
-        }
-    };
-    let parsed = serde_json::from_str::<Value>(&upstream_text).unwrap_or(Value::Null);
+    let (status, passthrough_headers, parsed) =
+        if matches!(route.config.protocol, GatewayRouteProtocol::Codex) {
+            match run_codex_gateway_completion(&openai_payload, mapping, route).await {
+                Ok(payload) => (StatusCode::OK, HeaderMap::new(), payload),
+                Err(error) => {
+                    return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error")
+                }
+            }
+        } else {
+            let upstream =
+                match fetch_openai_upstream(ctx, route, "/v1/chat/completions", &openai_payload)
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(error) => {
+                        return anthropic_error_response(
+                            StatusCode::BAD_GATEWAY,
+                            &error,
+                            "api_error",
+                        )
+                    }
+                };
+            let status =
+                StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let passthrough_headers = copy_relevant_headers(upstream.headers());
+            let upstream_text = match upstream.text().await {
+                Ok(text) => text,
+                Err(error) => {
+                    return anthropic_error_response(
+                        StatusCode::BAD_GATEWAY,
+                        &format!("Failed to read upstream response: {}", error),
+                        "api_error",
+                    )
+                }
+            };
+            let parsed = serde_json::from_str::<Value>(&upstream_text).unwrap_or(Value::Null);
+            (status, passthrough_headers, parsed)
+        };
 
     if !status.is_success() {
-        let message = extract_error_message(&parsed).unwrap_or_else(|| format!("Upstream error: {}", status));
+        let message =
+            extract_error_message(&parsed).unwrap_or_else(|| format!("Upstream error: {}", status));
         return anthropic_error_response(status, &message, "api_error");
     }
     if !parsed.is_object() {
-        return anthropic_error_response(StatusCode::BAD_GATEWAY, "Upstream returned invalid JSON", "api_error");
+        return anthropic_error_response(
+            StatusCode::BAD_GATEWAY,
+            "Upstream returned invalid JSON",
+            "api_error",
+        );
+    }
+    if let Some(usage) = extract_openai_usage(&parsed) {
+        record_gateway_usage(ctx, route, mapping, usage);
     }
 
-    let anthropic_response = convert_openai_response_to_anthropic(&parsed, &mapping.requested_model);
-    if payload.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+    let anthropic_response =
+        convert_openai_response_to_anthropic(&parsed, &mapping.requested_model);
+    if payload
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         let mut response = Response::new(Body::from(stream_anthropic_message(&anthropic_response)));
         *response.status_mut() = StatusCode::OK;
         for (name, value) in &passthrough_headers {
@@ -1591,15 +2185,27 @@ async fn handle_count_tokens(
     if matches!(route.config.protocol, GatewayRouteProtocol::Anthropic) {
         let mut upstream_payload = payload.clone();
         if let Some(obj) = upstream_payload.as_object_mut() {
-            obj.insert("model".to_string(), Value::String(mapping.target_model.clone()));
+            obj.insert(
+                "model".to_string(),
+                Value::String(mapping.target_model.clone()),
+            );
         }
-        let upstream =
-            match fetch_anthropic_upstream(ctx, route, headers, "/v1/messages/count_tokens", &upstream_payload).await
-            {
-                Ok(resp) => resp,
-                Err(error) => return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error"),
-            };
-        let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        let upstream = match fetch_anthropic_upstream(
+            ctx,
+            route,
+            headers,
+            "/v1/messages/count_tokens",
+            &upstream_payload,
+        )
+        .await
+        {
+            Ok(resp) => resp,
+            Err(error) => {
+                return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error")
+            }
+        };
+        let status =
+            StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
         let passthrough_headers = copy_relevant_headers(upstream.headers());
         let body = upstream.text().await.unwrap_or_else(|_| "{}".to_string());
         let mut response = Response::new(Body::from(body));
@@ -1614,6 +2220,15 @@ async fn handle_count_tokens(
         return response;
     }
 
+    if matches!(route.config.protocol, GatewayRouteProtocol::Codex) {
+        let input_tokens = estimate_input_tokens(payload).max(0);
+        return json_response_with_headers(
+            StatusCode::OK,
+            json!({ "input_tokens": input_tokens }),
+            &HeaderMap::new(),
+        );
+    }
+
     let mut openai_payload = convert_anthropic_request_to_openai(payload, &mapping.target_model);
     if let Some(obj) = openai_payload.as_object_mut() {
         obj.insert("max_tokens".to_string(), json!(1));
@@ -1621,25 +2236,36 @@ async fn handle_count_tokens(
         obj.insert("stream".to_string(), json!(false));
     }
 
-    let upstream = match fetch_openai_upstream(ctx, route, "/v1/chat/completions", &openai_payload).await {
-        Ok(resp) => resp,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error"),
-    };
-    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let upstream =
+        match fetch_openai_upstream(ctx, route, "/v1/chat/completions", &openai_payload).await {
+            Ok(resp) => resp,
+            Err(error) => {
+                return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error")
+            }
+        };
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let passthrough_headers = copy_relevant_headers(upstream.headers());
     let text = upstream.text().await.unwrap_or_else(|_| "{}".to_string());
     let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
 
     if !status.is_success() {
-        let message = extract_error_message(&parsed).unwrap_or_else(|| format!("Upstream error: {}", status));
+        let message =
+            extract_error_message(&parsed).unwrap_or_else(|| format!("Upstream error: {}", status));
         return anthropic_error_response(status, &message, "api_error");
     }
     let prompt_tokens = parsed
         .get("usage")
         .and_then(|u| u.get("prompt_tokens"))
         .and_then(Value::as_i64);
-    let input_tokens = prompt_tokens.unwrap_or_else(|| estimate_input_tokens(payload)).max(0);
-    json_response_with_headers(StatusCode::OK, json!({ "input_tokens": input_tokens }), &passthrough_headers)
+    let input_tokens = prompt_tokens
+        .unwrap_or_else(|| estimate_input_tokens(payload))
+        .max(0);
+    json_response_with_headers(
+        StatusCode::OK,
+        json!({ "input_tokens": input_tokens }),
+        &passthrough_headers,
+    )
 }
 
 async fn gateway_messages_handler(
@@ -1649,15 +2275,29 @@ async fn gateway_messages_handler(
     body: Bytes,
 ) -> Response {
     if method != Method::POST {
-        return anthropic_error_response(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed", "invalid_request_error");
+        return anthropic_error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Method Not Allowed",
+            "invalid_request_error",
+        );
     }
     if !check_gateway_auth(&headers, &ctx.config) {
-        return anthropic_error_response(StatusCode::UNAUTHORIZED, "Invalid gateway token", "authentication_error");
+        return anthropic_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Invalid gateway token",
+            "authentication_error",
+        );
     }
 
     let payload = match parse_json_body(&body) {
         Ok(value) => value,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_REQUEST, &error, "invalid_request_error"),
+        Err(error) => {
+            return anthropic_error_response(
+                StatusCode::BAD_REQUEST,
+                &error,
+                "invalid_request_error",
+            )
+        }
     };
     let requested_model = payload
         .get("model")
@@ -1675,11 +2315,23 @@ async fn gateway_messages_handler(
 
     let mapping = match resolve_model_mapping(&ctx.config, requested_model) {
         Ok(value) => value,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_REQUEST, &error, "invalid_request_error"),
+        Err(error) => {
+            return anthropic_error_response(
+                StatusCode::BAD_REQUEST,
+                &error,
+                "invalid_request_error",
+            )
+        }
     };
     let route = match resolve_route(&ctx.config, &mapping.route_name, &mapping.requested_model) {
         Ok(value) => value,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_REQUEST, &error, "invalid_request_error"),
+        Err(error) => {
+            return anthropic_error_response(
+                StatusCode::BAD_REQUEST,
+                &error,
+                "invalid_request_error",
+            )
+        }
     };
 
     log_gateway_request(
@@ -1695,11 +2347,16 @@ async fn gateway_messages_handler(
                 match route.config.protocol {
                     GatewayRouteProtocol::Anthropic => "anthropic".to_string(),
                     GatewayRouteProtocol::Openai => "openai".to_string(),
+                    GatewayRouteProtocol::Codex => "codex".to_string(),
                 },
             ),
             (
                 "stream",
-                if payload.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+                if payload
+                    .get("stream")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
                     "true".to_string()
                 } else {
                     "false".to_string()
@@ -1712,7 +2369,9 @@ async fn gateway_messages_handler(
         GatewayRouteProtocol::Anthropic => {
             handle_anthropic_messages(&ctx, &headers, &payload, &mapping, &route).await
         }
-        GatewayRouteProtocol::Openai => handle_openai_messages(&ctx, &payload, &mapping, &route).await,
+        GatewayRouteProtocol::Openai | GatewayRouteProtocol::Codex => {
+            handle_openai_messages(&ctx, &payload, &mapping, &route).await
+        }
     }
 }
 
@@ -1723,15 +2382,29 @@ async fn gateway_count_tokens_handler(
     body: Bytes,
 ) -> Response {
     if method != Method::POST {
-        return anthropic_error_response(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed", "invalid_request_error");
+        return anthropic_error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Method Not Allowed",
+            "invalid_request_error",
+        );
     }
     if !check_gateway_auth(&headers, &ctx.config) {
-        return anthropic_error_response(StatusCode::UNAUTHORIZED, "Invalid gateway token", "authentication_error");
+        return anthropic_error_response(
+            StatusCode::UNAUTHORIZED,
+            "Invalid gateway token",
+            "authentication_error",
+        );
     }
 
     let payload = match parse_json_body(&body) {
         Ok(value) => value,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_REQUEST, &error, "invalid_request_error"),
+        Err(error) => {
+            return anthropic_error_response(
+                StatusCode::BAD_REQUEST,
+                &error,
+                "invalid_request_error",
+            )
+        }
     };
     let requested_model = payload
         .get("model")
@@ -1749,11 +2422,23 @@ async fn gateway_count_tokens_handler(
 
     let mapping = match resolve_model_mapping(&ctx.config, requested_model) {
         Ok(value) => value,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_REQUEST, &error, "invalid_request_error"),
+        Err(error) => {
+            return anthropic_error_response(
+                StatusCode::BAD_REQUEST,
+                &error,
+                "invalid_request_error",
+            )
+        }
     };
     let route = match resolve_route(&ctx.config, &mapping.route_name, &mapping.requested_model) {
         Ok(value) => value,
-        Err(error) => return anthropic_error_response(StatusCode::BAD_REQUEST, &error, "invalid_request_error"),
+        Err(error) => {
+            return anthropic_error_response(
+                StatusCode::BAD_REQUEST,
+                &error,
+                "invalid_request_error",
+            )
+        }
     };
 
     log_gateway_request(
@@ -1779,7 +2464,10 @@ fn build_gateway_router(ctx: GatewayServerContext) -> Router {
         .route("/health", any(gateway_health_handler))
         .route("/v1/models", any(gateway_models_handler))
         .route("/v1/messages", any(gateway_messages_handler))
-        .route("/v1/messages/count_tokens", any(gateway_count_tokens_handler))
+        .route(
+            "/v1/messages/count_tokens",
+            any(gateway_count_tokens_handler),
+        )
         .fallback(any(gateway_not_found_handler))
         .with_state(ctx)
 }
@@ -1908,6 +2596,8 @@ async fn start_gateway_process(
         state.last_exit_code = None;
         state.last_exit_at = None;
         state.logs.clear();
+        state.usage_events.clear();
+        state.next_usage_event_id = 0;
         state.shutdown_tx = Some(shutdown_tx);
         state.server_task = Some(server_task);
         push_gateway_log(
@@ -1971,8 +2661,7 @@ async fn save_file(file_name: String, content: String) -> Result<String, String>
     use rfd::AsyncFileDialog;
 
     // 获取桌面目录作为默认位置
-    let desktop_dir = dirs::desktop_dir()
-        .ok_or_else(|| "无法获取桌面目录".to_string())?;
+    let desktop_dir = dirs::desktop_dir().ok_or_else(|| "无法获取桌面目录".to_string())?;
 
     let dialog = AsyncFileDialog::new()
         .set_file_name(&file_name)
@@ -1980,11 +2669,15 @@ async fn save_file(file_name: String, content: String) -> Result<String, String>
         .set_directory(&desktop_dir);
 
     // 等待用户选择保存位置
-    let file_handle = dialog.save_file().await
+    let file_handle = dialog
+        .save_file()
+        .await
         .ok_or_else(|| "用户取消保存".to_string())?;
 
     // 使用 FileHandle 的 write 方法写入文件
-    file_handle.write(&content.into_bytes()).await
+    file_handle
+        .write(&content.into_bytes())
+        .await
         .map_err(|e| format!("写入文件失败: {}", e))?;
 
     // 获取文件路径用于返回消息

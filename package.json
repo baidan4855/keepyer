@@ -1,6 +1,6 @@
 {
   "name": "keeyper",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "跨平台 LLM 代理与调试工作台",
   "type": "module",
   "scripts": {
