@@ -101,6 +101,41 @@ export interface SecuritySettings {
 }
 
 /**
+ * Claude Code 网关路由协议
+ */
+export type GatewayRouteProtocol = 'anthropic' | 'openai';
+
+/**
+ * Claude Code 网关路由配置
+ */
+export interface GatewayRouteConfig {
+  protocol: GatewayRouteProtocol;
+  baseUrl: string;
+  apiKey: string;
+  anthropicVersion?: string;
+}
+
+/**
+ * Claude Code 模型映射配置
+ */
+export interface GatewayModelMapping {
+  providerId: string;
+  keyId: string;
+  targetModel: string;
+}
+
+/**
+ * Claude Code 网关配置
+ */
+export interface ClaudeGatewayConfig {
+  listenHost: string;
+  listenPort: number;
+  gatewayToken: string;
+  requestLog: boolean;
+  modelMappings: Record<string, GatewayModelMapping>;
+}
+
+/**
  * 模型测试结果
  */
 export interface ModelTestResult {
@@ -133,6 +168,7 @@ export interface PendingModelTest {
  * 应用状态
  */
 export interface AppState {
+  activePage: 'providers' | 'gateway';
   providers: Provider[];
   apiKeys: ApiKey[];
   selectedProviderId: string | null;
@@ -155,4 +191,5 @@ export interface AppState {
   pendingAuthKeyId: string | null;
   lastAuthTime: number | null;
   modelTestResults: Record<string, ModelTestResult>;
+  gatewayConfig: ClaudeGatewayConfig;
 }

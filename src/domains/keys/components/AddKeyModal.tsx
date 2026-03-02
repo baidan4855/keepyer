@@ -9,7 +9,7 @@ import type { AddKeyForm } from '@/types';
 
 // 自定义日期选择器组件
 function DatePicker({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled: boolean }) {
-  const { t, i18n } = useTranslation();
+  const { i18n } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
@@ -38,13 +38,6 @@ function DatePicker({ value, onChange, disabled }: { value: string; onChange: (v
     }
   }, [value]);
 
-  // 解析日期
-  const parseDate = (dateStr: string) => {
-    if (!dateStr) return null;
-    const [year, month, day] = dateStr.split('-').map(Number);
-    return { year, month, day };
-  };
-
   // 切换到上一个月
   const prevMonth = () => {
     if (viewMonth === 1) {
@@ -64,8 +57,6 @@ function DatePicker({ value, onChange, disabled }: { value: string; onChange: (v
       setViewMonth(viewMonth + 1);
     }
   };
-
-  const date = parseDate(value);
 
   // 生成月份名称
   const getMonthName = (month: number) => {
@@ -272,6 +263,12 @@ export default function AddKeyModal() {
       return;
     }
 
+    const nameTrimmed = name.trim();
+    if (!isEditing && !nameTrimmed) {
+      setError(t('modals.addKey.error.requiredName'));
+      return;
+    }
+
     if (!selectedProviderId) {
       setError(t('modals.addKey.error.noProvider'));
       return;
@@ -286,7 +283,7 @@ export default function AddKeyModal() {
       if (isEditing && editKeyId) {
         // 编辑模式：只传递修改的字段
         const updateData: Partial<AddKeyForm> = {
-          name: name.trim() || undefined,
+          name: nameTrimmed || undefined,
           note: note.trim() || undefined,
           expiresAt: neverExpire ? undefined : expiresAt ? new Date(expiresAt) : undefined,
         };
@@ -301,7 +298,7 @@ export default function AddKeyModal() {
         // 新增模式：传递所有数据
         const data: AddKeyForm = {
           key: keyTrimmed,
-          name: name.trim() || undefined,
+          name: nameTrimmed,
           note: note.trim() || undefined,
           expiresAt: neverExpire ? undefined : expiresAt ? new Date(expiresAt) : undefined,
         };
@@ -364,7 +361,7 @@ export default function AddKeyModal() {
 
             <div>
               <label htmlFor="keyName" className="block text-sm font-medium text-slate-700 mb-1.5">
-                {t('modals.addKey.name')}
+                {t('modals.addKey.name')} {!isEditing ? <span className="text-red-500">*</span> : null}
               </label>
               <input
                 id="keyName"
@@ -373,6 +370,7 @@ export default function AddKeyModal() {
                 onChange={(e) => setName(e.target.value)}
                 placeholder={t('modals.addKey.namePlaceholder')}
                 className="input py-2.5 px-3 text-sm"
+                required={!isEditing}
               />
             </div>
 

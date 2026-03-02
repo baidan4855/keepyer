@@ -1,4 +1,4 @@
-import { Lock, X } from 'lucide-react';
+import { Bot, Lock, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useStore } from '@/store';
 import { exportData, importData } from '@/domains/settings/lib/import-export';
@@ -10,23 +10,24 @@ export default function SettingsModal() {
     isSettingsOpen,
     setSettingsOpen,
     setPasswordSetupOpen,
+    setActivePage,
   } = useStore();
+
   const handleExport = async () => {
     try {
       await exportData();
       toast.success(t('settings.exportSuccess') || '导出成功');
-    } catch (error) {
+    } catch {
       toast.error(t('settings.exportError') || '导出失败');
     }
   };
 
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (!file) return;
 
     try {
       await importData(file);
-
       toast.success(t('settings.importSuccess') || '导入成功');
     } catch (error) {
       const message = error instanceof Error && error.message === 'invalidFile'
@@ -35,8 +36,7 @@ export default function SettingsModal() {
       toast.error(message);
     }
 
-    // 重置文件输入
-    e.target.value = '';
+    event.target.value = '';
   };
 
   if (!isSettingsOpen) return null;
@@ -57,7 +57,6 @@ export default function SettingsModal() {
           </div>
 
           <div className="space-y-4">
-            {/* 密码保护 */}
             <div className="p-3 bg-slate-50 rounded-lg">
               <p className="text-sm font-medium text-slate-800 mb-1">{t('settings.passwordProtection') || '密码保护'}</p>
               <p className="text-xs text-slate-500">{t('settings.passwordProtectionDesc') || '设置密码后，所有敏感操作（查看、复制、编辑、删除密钥）都需要密码验证。密码在 10 分钟内只需输入一次。'}</p>
@@ -68,7 +67,22 @@ export default function SettingsModal() {
               <p className="text-xs text-slate-500 mt-0.5">{t('settings.changePasswordDesc') || '设置或修改您的密码'}</p>
             </button>
 
-            {/* 数据管理 */}
+            <button
+              onClick={() => {
+                setSettingsOpen(false);
+                setActivePage('gateway');
+              }}
+              className="w-full p-3 bg-primary-50 rounded-lg text-left hover:bg-primary-100 transition-colors border border-primary-100"
+            >
+              <div className="flex items-center gap-2">
+                <Bot className="w-4 h-4 text-primary-700" />
+                <div>
+                  <p className="text-sm font-medium text-primary-800">{t('settings.gatewayEntryTitle') || 'LLM 网关配置'}</p>
+                  <p className="text-xs text-primary-600 mt-0.5">{t('settings.gatewayEntryDesc') || '在独立页面配置模型映射并启动/停止网关'}</p>
+                </div>
+              </div>
+            </button>
+
             <div className="border-t border-slate-100 pt-4 mt-4">
               <div className="flex items-center gap-2 mb-3">
                 <svg className="w-5 h-5 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -105,7 +119,6 @@ export default function SettingsModal() {
                 </label>
               </div>
             </div>
-
           </div>
         </div>
       </div>

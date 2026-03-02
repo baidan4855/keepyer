@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, Play, RefreshCw, Save, Search, SendHorizontal, ShieldAlert, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { useStore } from '@/store';
 import { decryptApiKey } from '@/domains/settings/lib/secure-storage';
-import { testModel, type ModelTestResult } from '@/domains/keys/lib/api-test';
+import { testModel, type ModelProtocolOptions, type ModelTestResult } from '@/domains/keys/lib/api-test';
+import type { LlmProtocol } from '@/domains/chat/lib/llm-proxy';
 import {
   getDefaultDebugInputPrompt,
   getDefaultSystemPrompt,
@@ -38,6 +39,86 @@ type ProbeRun = {
   evaluation: SecurityProbeEvaluation;
   timestamp: number;
 };
+
+const protocolSelectOptions: Array<{ value: LlmProtocol; label: string }> = [
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+];
+
+function ProtocolSelect({
+  value,
+  onChange,
+  options,
+}: {
+  value: LlmProtocol;
+  onChange: (protocol: LlmProtocol) => void;
+  options: Array<{ value: LlmProtocol; label: string }>;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const selected = options.find((option) => option.value === value) || null;
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isOpen]);
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className={cn(
+          'w-full h-10 py-2.5 px-3 rounded-xl text-left text-sm',
+          'bg-white border border-slate-200',
+          'text-slate-800',
+          'transition-all duration-200',
+          'focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500',
+          'flex items-center justify-between'
+        )}
+      >
+        <span className="truncate pr-2">{selected?.label || value}</span>
+        <ChevronDown className={cn('w-4 h-4 text-slate-400 transition-transform', isOpen && 'rotate-180')} />
+      </button>
+
+      {isOpen ? (
+        <div className="absolute z-50 w-full mt-1.5 p-2 bg-white rounded-2xl shadow-soft-lg border border-primary-100/50 animate-scale-in">
+          <div className="space-y-1">
+            {options.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  onChange(option.value);
+                  setIsOpen(false);
+                }}
+                className={cn(
+                  'w-full px-3 py-2 rounded-lg text-left text-xs transition-all duration-150',
+                  'hover:bg-primary-50',
+                  value === option.value
+                    ? 'bg-primary-100 text-primary-700 font-medium'
+                    : 'text-slate-700'
+                )}
+              >
+                <div className="truncate">{option.label}</div>
+                <div className="truncate text-[10px] text-slate-400">{option.value}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function ModelSearchSelect({
   value,
@@ -188,6 +269,8 @@ export default function DebugChatModal() {
   const responseLanguageInstruction = useMemo(() => getResponseLanguageInstruction(i18n.language), [i18n.language]);
   const [chatSystemPrompt, setChatSystemPrompt] = useState('');
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
+  const [chatInputProtocol, setChatInputProtocol] = useState<LlmProtocol>('openai');
+  const [chatTargetProtocol, setChatTargetProtocol] = useState<LlmProtocol>('openai');
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [latestResult, setLatestResult] = useState<ModelTestResult | null>(null);
   const [responseDataTab, setResponseDataTab] = useState<'payload' | 'raw' | 'meta'>('payload');
@@ -220,6 +303,22 @@ export default function DebugChatModal() {
     }
     return normalized;
   }, [provider?.systemPrompt]);
+  const defaultTargetProtocol = useMemo<LlmProtocol>(
+    () => (provider?.apiType === 'claude' ? 'anthropic' : 'openai'),
+    [provider?.apiType]
+  );
+  const defaultInputProtocol = useMemo<LlmProtocol>(
+    () => (provider?.apiType === 'claude' ? 'openai' : defaultTargetProtocol),
+    [defaultTargetProtocol, provider?.apiType]
+  );
+  const modelProtocolOptions = useMemo<ModelProtocolOptions>(
+    () => ({
+      inputProtocol: chatInputProtocol,
+      targetProtocol: chatTargetProtocol,
+      enableProtocolTransform: chatInputProtocol !== chatTargetProtocol,
+    }),
+    [chatInputProtocol, chatTargetProtocol]
+  );
 
   const defaultProbeCustomPrompt = useMemo(
     () => getDefaultSecurityProbeCustomPrompt(i18n.language),
@@ -265,6 +364,8 @@ export default function DebugChatModal() {
     setIsChatLoading(false);
     setChatSystemPrompt(providerSystemPrompt);
     setThinkingEnabled(true);
+    setChatInputProtocol(defaultInputProtocol);
+    setChatTargetProtocol(defaultTargetProtocol);
     setStreamedResponse('');
     setIsRenderingStream(false);
     setResultView('single');
@@ -276,7 +377,7 @@ export default function DebugChatModal() {
     setProbeRuns([]);
     setProbeProgress(null);
     setSelectedProbeCell(null);
-  }, [isDebugChatOpen, key?.id, providerSystemPrompt]);
+  }, [defaultInputProtocol, defaultTargetProtocol, isDebugChatOpen, key?.id, providerSystemPrompt]);
 
   useEffect(() => {
     if (!models.length) {
@@ -389,6 +490,7 @@ export default function DebugChatModal() {
         undefined,
         requestSystemPrompt,
         thinkingEnabled,
+        modelProtocolOptions,
       );
 
       setLatestResult({ ...result, timestamp: Date.now() });
@@ -468,6 +570,7 @@ export default function DebugChatModal() {
             undefined,
             probeSystemPrompt,
             thinkingEnabled,
+            modelProtocolOptions,
           );
 
           const evaluation = evaluateSecurityProbe({
@@ -641,6 +744,33 @@ export default function DebugChatModal() {
                         options={modelOptions}
                       />
                     </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                          {t('keys.inputProtocol') || 'Input Protocol'}
+                        </label>
+                        <ProtocolSelect
+                          value={chatInputProtocol}
+                          onChange={setChatInputProtocol}
+                          options={protocolSelectOptions}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                          {t('keys.targetProtocol') || 'Target Protocol'}
+                        </label>
+                        <ProtocolSelect
+                          value={chatTargetProtocol}
+                          onChange={setChatTargetProtocol}
+                          options={protocolSelectOptions}
+                        />
+                      </div>
+                    </div>
+                    {chatInputProtocol !== chatTargetProtocol && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+                        {t('keys.protocolTransformEnabled') || 'Protocol transform is enabled for this request.'}
+                      </div>
+                    )}
                     <div>
                       <label className="block text-[11px] font-medium text-slate-600 mb-1">
                         {t('keys.thinking') || 'Thinking'}

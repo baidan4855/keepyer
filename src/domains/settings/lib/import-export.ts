@@ -2,10 +2,27 @@
  * 导入导出工具
  */
 
-import type { Provider, ApiKey } from '@/types';
+import type {
+  Provider,
+  ApiKey,
+  ClaudeGatewayConfig,
+} from '@/types';
 import { useStore } from '@/store';
 import { encryptApiKey } from './secure-storage';
 import { generateId } from '@/shared/lib/helpers';
+import { buildGatewayRuntimeConfig } from '@/domains/gateway/lib/config-builder';
+
+interface ExportApiKey {
+  id?: string;
+  providerId?: string;
+  serviceId?: string; // legacy (import only)
+  key: string; // 明文或加密格式
+  name?: string;
+  note?: string;
+  expiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 /**
  * 导出数据格式
@@ -15,138 +32,148 @@ export interface ExportData {
   exportedAt: string;
   providers?: Provider[];
   services?: Provider[]; // legacy (import only)
-  apiKeys: Array<{
-    id?: string;
-    providerId?: string;
-    serviceId?: string; // legacy (import only)
-    key: string; // 已加密的密钥
-    name?: string;
-    note?: string;
-    expiresAt?: string;
-    createdAt: string;
-    updatedAt: string;
-  }>;
+  apiKeys: ExportApiKey[];
+  gatewayConfig?: ClaudeGatewayConfig;
+}
+
+function toISOString(date: Date | string | undefined): string | undefined {
+  if (!date) return undefined;
+  if (typeof date === 'string') return date;
+  return date.toISOString();
+}
+
+function parseDate(value: string | undefined): Date {
+  if (!value) return new Date();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+async function saveJsonFile(fileName: string, data: unknown): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const content = JSON.stringify(data, null, 2);
+  await invoke('save_file', { fileName, content });
 }
 
 /**
- * 导出数据
+ * 导出数据备份
  */
 export async function exportData(): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
-  const { providers, apiKeys } = useStore.getState();
+  const { providers, apiKeys, gatewayConfig } = useStore.getState();
 
-  // 辅助函数：将日期转换为 ISO 字符串
-  const toISOString = (date: Date | string | undefined): string | undefined => {
-    if (!date) return undefined;
-    if (typeof date === 'string') return date;
-    return date.toISOString();
-  };
+  const exportKeys: ExportApiKey[] = await Promise.all(
+    apiKeys.map(async (key) => {
+      let decryptedKey: string;
 
-  // 解密并导出密钥数据
-  const exportKeys = await Promise.all(apiKeys.map(async (key) => {
-    let decryptedKey: string;
-
-    try {
-      // 尝试解密
-      const result = await invoke<string>('decrypt_data', { encryptedData: key.key });
-
-      // 检查解密是否成功（结果不应是加密数据格式）
-      if (result && !result.startsWith('{"nonce":')) {
-        decryptedKey = result;
-      } else {
-        // 解密失败，使用原始密钥（虽然仍是加密格式）
-        console.warn('解密失败，保留加密格式');
+      try {
+        const result = await invoke<string>('decrypt_data', { encryptedData: key.key });
+        if (result && !result.startsWith('{"nonce":')) {
+          decryptedKey = result;
+        } else {
+          console.warn('解密失败，保留加密格式');
+          decryptedKey = key.key;
+        }
+      } catch (error) {
+        console.error('解密异常:', error);
         decryptedKey = key.key;
       }
-    } catch (error) {
-      console.error('解密异常:', error);
-      // 解密失败时使用原始密钥
-      decryptedKey = key.key;
-    }
 
-    return {
-      id: key.id,
-      providerId: key.providerId,
-      key: decryptedKey,
-      name: key.name,
-      note: key.note,
-      expiresAt: toISOString(key.expiresAt),
-      createdAt: toISOString(key.createdAt),
-      updatedAt: toISOString(key.updatedAt),
-    };
-  }));
+      return {
+        id: key.id,
+        providerId: key.providerId,
+        key: decryptedKey,
+        name: key.name,
+        note: key.note,
+        expiresAt: toISOString(key.expiresAt),
+        createdAt: toISOString(key.createdAt) || new Date().toISOString(),
+        updatedAt: toISOString(key.updatedAt) || new Date().toISOString(),
+      };
+    }),
+  );
 
   const data: ExportData = {
-    version: '2.0.0',
+    version: '2.1.0',
     exportedAt: new Date().toISOString(),
     providers,
     apiKeys: exportKeys,
+    gatewayConfig,
   };
 
   const fileName = `keeyper-backup-${new Date().toISOString().split('T')[0]}.json`;
-  const content = JSON.stringify(data, null, 2);
+  await saveJsonFile(fileName, data);
+}
 
-  // 使用 Tauri 命令保存文件
-  await invoke('save_file', { fileName, content });
+/**
+ * 导出 Claude Code 网关配置（gateway.config.json）
+ */
+export async function exportGatewayConfigFile(): Promise<void> {
+  const { gatewayConfig, providers, apiKeys } = useStore.getState();
+  const runtimeConfig = await buildGatewayRuntimeConfig(gatewayConfig, providers, apiKeys);
+  await saveJsonFile('gateway.config.json', runtimeConfig);
 }
 
 /**
  * 导入数据
  */
 export async function importData(file: File): Promise<void> {
-  return new Promise(async (resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
-    reader.onload = async (e) => {
+    reader.onload = async (event) => {
       try {
-        const content = e.target?.result as string;
+        const content = String(event.target?.result || '');
         const data = JSON.parse(content) as ExportData;
 
-        // 验证数据格式
         const providers = data.providers ?? data.services;
-        if (!data.version || !providers || !Array.isArray(data.apiKeys)) {
+        if (!data.version || !Array.isArray(providers) || !Array.isArray(data.apiKeys)) {
           throw new Error('invalidFile');
         }
 
-        // 获取现有数据（从 store）
         const { providers: existingProviders, apiKeys: existingKeys } = useStore.getState();
 
-        // 合并提供方（使用 Map 根据 ID 去重）
         const providersMap = new Map<string, Provider>();
-        existingProviders.forEach((p) => providersMap.set(p.id, p));
-        providers.forEach((p) => providersMap.set(p.id, p));
+        existingProviders.forEach((provider) => providersMap.set(provider.id, provider));
+        providers.forEach((provider) => providersMap.set(provider.id, provider));
         const mergedProviders = Array.from(providersMap.values());
+        const providerIds = new Set(mergedProviders.map((provider) => provider.id));
 
-        // 加密并合并密钥（使用 Map 根据 ID 去重）
         const keysMap = new Map<string, ApiKey>();
-        existingKeys.forEach((k) => keysMap.set(k.id, k));
+        existingKeys.forEach((key) => keysMap.set(key.id, key));
 
-        // 并行加密所有导入的密钥
-        const importKeys = await Promise.all(data.apiKeys.map(async (k) => {
-          // 加密明文密钥
-          const encryptedKey = await encryptApiKey(k.key);
+        const importedKeys = await Promise.all(
+          data.apiKeys.map(async (rawKey) => {
+            const sourceProviderId = rawKey.providerId ?? rawKey.serviceId;
+            if (!sourceProviderId || !providerIds.has(sourceProviderId)) {
+              return null;
+            }
 
-          return {
-            id: k.id ?? generateId(),
-            providerId: k.providerId ?? k.serviceId,
-            key: encryptedKey, // 存储加密后的密钥
-            name: k.name,
-            note: k.note,
-            expiresAt: k.expiresAt ? new Date(k.expiresAt) : undefined,
-            createdAt: new Date(k.createdAt),
-            updatedAt: new Date(k.updatedAt),
-            // 不导入模型列表和测试结果
-            models: [],
-            testResult: undefined,
-          };
-        }));
+            const encryptedKey = await encryptApiKey(rawKey.key);
+            const createdAt = parseDate(rawKey.createdAt);
+            const updatedAt = parseDate(rawKey.updatedAt);
+            const expiresAt = rawKey.expiresAt ? parseDate(rawKey.expiresAt) : undefined;
 
-        importKeys.forEach((k) => keysMap.set(k.id, k));
+            return {
+              id: rawKey.id ?? generateId(),
+              providerId: sourceProviderId,
+              key: encryptedKey,
+              name: rawKey.name,
+              note: rawKey.note,
+              expiresAt,
+              createdAt,
+              updatedAt,
+              models: [],
+            } as ApiKey;
+          }),
+        );
+
+        importedKeys
+          .filter((key): key is ApiKey => key !== null)
+          .forEach((key) => {
+            keysMap.set(key.id, key);
+          });
+
         const mergedKeys = Array.from(keysMap.values());
-
-        // 使用 store 更新数据（会自动持久化到 localStorage）
-        useStore.getState().importData(mergedProviders, mergedKeys);
-
+        useStore.getState().importData(mergedProviders, mergedKeys, data.gatewayConfig);
         resolve();
       } catch (error) {
         reject(error);

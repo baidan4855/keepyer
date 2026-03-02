@@ -2,11 +2,6 @@
  * 本地存储工具
  */
 
-const STORAGE_KEYS = {
-  PROVIDERS: 'keeyper_providers',
-  API_KEYS: 'keeyper_api_keys',
-};
-
 /**
  * 从 localStorage 获取数据
  */

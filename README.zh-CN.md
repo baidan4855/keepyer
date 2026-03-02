@@ -1,8 +1,23 @@
+<p align="center">
+  <img src="public/icon.png" alt="Keeyper 图标" width="120" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-2.0.0-3b82f6" alt="版本 2.0.0" />
+  <img src="https://img.shields.io/badge/license-MIT-10b981" alt="MIT 许可证" />
+  <img src="https://img.shields.io/badge/Tauri-2.x-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2.x" />
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white" alt="React 18" />
+  <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.x" />
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-64748b" alt="支持平台" />
+</p>
+
 # Keeyper
 
-跨平台大模型 API Key 管理工具 - 一个简单精致的桌面应用，用于管理各种 AI 提供方的 API 密钥。
+跨平台 LLM 代理与调试工作台 - 聚合协议路由、模型调试、安全探测，并内置 Provider 与 API Key 管理能力。
 
 > English documentation: `README.md`.
+>
+> 当前版本：`2.0.0`。
 
 ## 功能特性
 
@@ -12,18 +27,45 @@
 - **快捷复制**: 一键复制提供方地址和 API 密钥
 - **模型搜索**: 在模型列表中按名称或 ID 搜索模型
 - **模型测试**: 测试单个模型的可用性（支持 OpenAI 和 Claude 协议）
+- **LLM 代理网关（Anthropic 兼容）**: 将 Claude 模型 ID 映射到已配置的 Provider/模型，并通过 gateway token 鉴权
+- **网关运行控制**: 在应用内启动/停止网关进程并查看运行日志
 - **本地存储**: 所有数据存储在本地，不上传到云端
 - **跨平台**: 支持 Windows、macOS 和 Linux
 - **轻量级**: 使用 Tauri 构建，应用体积仅约 10MB
 
 ## 应用截图
 
-以下为两个核心界面，展示日常使用的主要流程。
+下面展示 5 个主要页面。
 
-![主界面](assets/main_page.png)
-主界面汇总提供方与密钥状态，便于快速查看与操作。
+### 1. 主界面
+
+提供方与密钥总览，包含密钥状态和常用快捷操作。
+
+![主界面](assets/main.png)
+
+### 2. 模型列表
+
+查看并搜索当前 Key/Provider 下可用模型。
+
 ![模型列表](assets/model_list.png)
-模型列表用于查看和管理各密钥/提供方的模型可用性。
+
+### 3. 拷问（Debug Chat）
+
+按模型与协议进行单轮调试请求，并查看响应结果是否与预期相符。
+
+![拷问](assets/debug.png)
+
+### 4. 安全探测（Security Probe）
+
+批量运行安全探测用例，并查看通过/告警/失败矩阵。
+
+![安全探测](assets/probe.png)
+
+### 5. LLM 代理网关
+
+配置模型路由并管理网关运行状态与日志。
+
+![LLM 代理网关](assets/gateway.png)
 
 ## 开发环境设置
 
@@ -134,6 +176,12 @@ src/
 - **更少的内存占用**: 使用系统 WebView
 - **更好的安全性**: Rust 内存安全保证
 - **更快的启动速度**: 更轻量的运行时
+
+## 致谢
+
+本项目完全由 `Codex` 与 `Claude Code` 协作开发完成。
+
+感谢两者背后的团队与工具能力，让从产品想法到工程落地的迭代效率大幅提升。
 
 ## 许可证
 

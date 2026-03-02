@@ -14,6 +14,7 @@ import type {
   SecuritySettings,
   ApiModel,
   ModelTestResult,
+  ClaudeGatewayConfig,
 } from '@/types';
 import {
   generateId,
@@ -35,9 +36,10 @@ interface StoreActions {
   deleteKey: (id: string) => void;
 
   // 批量导入数据
-  importData: (providers: Provider[], apiKeys: ApiKey[]) => void;
+  importData: (providers: Provider[], apiKeys: ApiKey[], gatewayConfig?: ClaudeGatewayConfig) => void;
 
   // UI 状态
+  setActivePage: (page: 'providers' | 'gateway') => void;
   setSelectedProviderId: (id: string | null) => void;
   setAddProviderModalOpen: (open: boolean) => void;
   setEditProviderId: (id: string | null) => void;
@@ -58,6 +60,9 @@ interface StoreActions {
   setPendingAuthKeyId: (id: string | null) => void;
   setLastAuthTime: (time: number | null) => void;
   checkAuthSession: () => boolean;
+  setGatewayConfig: (config: ClaudeGatewayConfig) => void;
+  updateGatewayConfig: (config: Partial<ClaudeGatewayConfig>) => void;
+  resetGatewayConfig: () => void;
 
   // 获取提供方列表（带状态）
   getProvidersWithKeys: () => ReturnType<typeof buildProviderWithKeys>[];
@@ -83,7 +88,117 @@ function dateReviver(key: string, value: unknown): unknown {
   return value;
 }
 
+function createDefaultGatewayConfig(): ClaudeGatewayConfig {
+  return {
+    listenHost: '127.0.0.1',
+    listenPort: 8787,
+    gatewayToken: '',
+    requestLog: true,
+    modelMappings: {},
+  };
+}
+
+function normalizeGatewayConfig(config: unknown): ClaudeGatewayConfig {
+  const defaults = createDefaultGatewayConfig();
+  if (!config || typeof config !== 'object') {
+    return defaults;
+  }
+
+  const raw = config as Record<string, unknown>;
+  const rawRoutes = raw.routes && typeof raw.routes === 'object'
+    ? raw.routes as Record<string, unknown>
+    : {};
+  const rawMappings = raw.modelMappings && typeof raw.modelMappings === 'object'
+    ? raw.modelMappings as Record<string, unknown>
+    : {};
+
+  const resolveLegacyRoute = (routeName: string): { providerId: string; keyId: string } | null => {
+    const route = rawRoutes[routeName];
+    if (!route || typeof route !== 'object') return null;
+    const typedRoute = route as Record<string, unknown>;
+    const providerId = typeof typedRoute.providerId === 'string' ? typedRoute.providerId.trim() : '';
+    const keyId = typeof typedRoute.keyId === 'string' ? typedRoute.keyId.trim() : '';
+    if (!providerId || !keyId) return null;
+    return { providerId, keyId };
+  };
+
+  const modelMappings: ClaudeGatewayConfig['modelMappings'] = {};
+
+  for (const [sourceModelRaw, value] of Object.entries(rawMappings)) {
+    const modelName = sourceModelRaw.trim();
+    if (!modelName) continue;
+    if (!value || typeof value !== 'object') continue;
+
+    const mapping = value as Record<string, unknown>;
+    const providerId = typeof mapping.providerId === 'string' ? mapping.providerId.trim() : '';
+    const keyId = typeof mapping.keyId === 'string' ? mapping.keyId.trim() : '';
+
+    let resolvedProviderId = providerId;
+    let resolvedKeyId = keyId;
+
+    if ((!resolvedProviderId || !resolvedKeyId) && typeof mapping.route === 'string') {
+      const legacy = resolveLegacyRoute(mapping.route.trim());
+      if (legacy) {
+        resolvedProviderId = legacy.providerId;
+        resolvedKeyId = legacy.keyId;
+      }
+    }
+
+    if (!resolvedProviderId || !resolvedKeyId) continue;
+
+    const targetModel = typeof mapping.targetModel === 'string' && mapping.targetModel.trim()
+      ? mapping.targetModel.trim()
+      : (typeof mapping.model === 'string' && mapping.model.trim() ? mapping.model.trim() : modelName);
+
+    modelMappings[modelName] = {
+      providerId: resolvedProviderId,
+      keyId: resolvedKeyId,
+      targetModel,
+    };
+  }
+
+  return {
+    listenHost: typeof raw.listenHost === 'string' && raw.listenHost.trim()
+      ? raw.listenHost.trim()
+      : defaults.listenHost,
+    listenPort: typeof raw.listenPort === 'number' && Number.isFinite(raw.listenPort) && raw.listenPort > 0
+      ? Math.floor(raw.listenPort)
+      : defaults.listenPort,
+    gatewayToken: typeof raw.gatewayToken === 'string' ? raw.gatewayToken : '',
+    requestLog: raw.requestLog !== false,
+    modelMappings,
+  };
+}
+
+function sanitizeGatewayConfigResources(
+  gatewayConfig: ClaudeGatewayConfig,
+  providers: Provider[],
+  apiKeys: ApiKey[],
+): ClaudeGatewayConfig {
+  const providerIds = new Set(providers.map((provider) => provider.id));
+  const keyMap = new Map(apiKeys.map((key) => [key.id, key]));
+  const nextMappings: ClaudeGatewayConfig['modelMappings'] = {};
+  Object.entries(gatewayConfig.modelMappings).forEach(([sourceModelRaw, mapping]) => {
+    const sourceModel = sourceModelRaw.trim();
+    if (!sourceModel) return;
+    if (!providerIds.has(mapping.providerId)) return;
+    const key = keyMap.get(mapping.keyId);
+    if (!key || key.providerId !== mapping.providerId) return;
+    nextMappings[sourceModel] = {
+      providerId: mapping.providerId,
+      keyId: mapping.keyId,
+      targetModel: mapping.targetModel?.trim() || sourceModel,
+    };
+  });
+
+  return {
+    ...gatewayConfig,
+    modelMappings: nextMappings,
+  };
+}
+
 const initialState: AppState = {
+  activePage: 'providers',
   providers: [],
   apiKeys: [],
   selectedProviderId: null,
@@ -109,6 +224,7 @@ const initialState: AppState = {
   pendingAuthKeyId: null,
   lastAuthTime: null,
   modelTestResults: {},
+  gatewayConfig: createDefaultGatewayConfig(),
 };
 
 const PERSIST_STORAGE_KEY = 'keeyper-storage';
@@ -155,23 +271,35 @@ export const useStore = create<AppStore>()(
       },
 
       deleteProvider: (id) => {
-        set((state) => ({
-          providers: state.providers.filter((provider) => provider.id !== id),
-          apiKeys: state.apiKeys.filter((k) => k.providerId !== id),
-          selectedProviderId:
-            state.selectedProviderId === id ? null : state.selectedProviderId,
-        }));
+        set((state) => {
+          const providers = state.providers.filter((provider) => provider.id !== id);
+          const apiKeys = state.apiKeys.filter((key) => key.providerId !== id);
+          const gatewayConfig = sanitizeGatewayConfigResources(state.gatewayConfig, providers, apiKeys);
+
+          return {
+            providers,
+            apiKeys,
+            gatewayConfig,
+            selectedProviderId:
+              state.selectedProviderId === id ? null : state.selectedProviderId,
+          };
+        });
       },
 
       // API Key 操作
       addKey: async (providerId, data) => {
+        const trimmedName = data.name?.trim();
+        if (!trimmedName) {
+          throw new Error(i18n.t('modals.addKey.error.requiredName') || 'API key name is required');
+        }
+
         // 加密 API Key 后存储
         const encryptedKey = await encryptApiKey(data.key);
         const newKey: ApiKey = {
           id: generateId(),
           providerId,
           key: encryptedKey, // 存储加密后的密钥
-          name: data.name,
+          name: trimmedName,
           note: data.note,
           expiresAt: data.expiresAt,
           createdAt: new Date(),
@@ -205,9 +333,14 @@ export const useStore = create<AppStore>()(
       },
 
       deleteKey: (id) => {
-        set((state) => ({
-          apiKeys: state.apiKeys.filter((k) => k.id !== id),
-        }));
+        set((state) => {
+          const apiKeys = state.apiKeys.filter((key) => key.id !== id);
+          const gatewayConfig = sanitizeGatewayConfigResources(state.gatewayConfig, state.providers, apiKeys);
+          return {
+            apiKeys,
+            gatewayConfig,
+          };
+        });
       },
 
       updateKeyModels: (id, models) => {
@@ -221,6 +354,7 @@ export const useStore = create<AppStore>()(
       },
 
       // UI 状态
+      setActivePage: (page) => set({ activePage: page }),
       setSelectedProviderId: (id) => set({ selectedProviderId: id }),
       setAddProviderModalOpen: (open) =>
         set((state) => ({
@@ -255,6 +389,33 @@ export const useStore = create<AppStore>()(
         const TEN_MINUTES = 10 * 60 * 1000;
         return Date.now() - state.lastAuthTime < TEN_MINUTES;
       },
+      setGatewayConfig: (config) =>
+        set((state) => ({
+          gatewayConfig: sanitizeGatewayConfigResources(
+            normalizeGatewayConfig(config),
+            state.providers,
+            state.apiKeys,
+          ),
+        })),
+      updateGatewayConfig: (config) =>
+        set((state) => ({
+          gatewayConfig: sanitizeGatewayConfigResources(
+            normalizeGatewayConfig({
+              ...state.gatewayConfig,
+              ...config,
+            }),
+            state.providers,
+            state.apiKeys,
+          ),
+        })),
+      resetGatewayConfig: () =>
+        set((state) => ({
+          gatewayConfig: sanitizeGatewayConfigResources(
+            createDefaultGatewayConfig(),
+            state.providers,
+            state.apiKeys,
+          ),
+        })),
 
       // 获取方法
       getProvidersWithKeys: () => {
@@ -316,27 +477,37 @@ export const useStore = create<AppStore>()(
       },
 
       // 批量导入数据
-      importData: (providers, apiKeys) => {
+      importData: (providers, apiKeys, gatewayConfig) => {
         const defaultSystemPrompt = getLocalizedDefaultSystemPrompt();
-        set({
-          providers: providers.map((provider) => ({
-            ...provider,
-            apiType: provider.apiType || 'openai',
-            systemPrompt: provider.systemPrompt?.trim()
-              ? (
-                  isLegacyDefaultSystemPrompt(provider.systemPrompt)
-                    ? defaultSystemPrompt
-                    : provider.systemPrompt
-                )
-              : defaultSystemPrompt,
-          })),
+        const normalizedGatewayConfig = gatewayConfig
+          ? normalizeGatewayConfig(gatewayConfig)
+          : get().gatewayConfig;
+        const normalizedProviders = providers.map((provider) => ({
+          ...provider,
+          apiType: provider.apiType || 'openai',
+          systemPrompt: provider.systemPrompt?.trim()
+            ? (
+                isLegacyDefaultSystemPrompt(provider.systemPrompt)
+                  ? defaultSystemPrompt
+                  : provider.systemPrompt
+              )
+            : defaultSystemPrompt,
+        }));
+        const sanitizedGatewayConfig = sanitizeGatewayConfigResources(
+          normalizedGatewayConfig,
+          normalizedProviders,
           apiKeys,
+        );
+        set({
+          providers: normalizedProviders,
+          apiKeys,
+          gatewayConfig: sanitizedGatewayConfig,
         });
       },
     }),
     {
       name: PERSIST_STORAGE_KEY,
-      version: 3,
+      version: 5,
       storage: createJSONStorage(() => localStorage, {
         reviver: dateReviver,
       }),
@@ -361,9 +532,19 @@ export const useStore = create<AppStore>()(
           }));
 
         if ('providers' in state || 'selectedProviderId' in state) {
+          const normalizedProviders = normalizeProviders(((state as any).providers ?? []) as any[]);
+          const normalizedApiKeys = ((state as any).apiKeys ?? []) as ApiKey[];
+          const gatewayConfig = sanitizeGatewayConfigResources(
+            normalizeGatewayConfig((state as any).gatewayConfig),
+            normalizedProviders,
+            normalizedApiKeys,
+          );
           return {
             ...state,
-            providers: normalizeProviders(((state as any).providers ?? []) as any[]),
+            activePage: (state as any).activePage === 'gateway' ? 'gateway' : 'providers',
+            providers: normalizedProviders,
+            apiKeys: normalizedApiKeys,
+            gatewayConfig,
           } as AppState;
         }
 
@@ -378,13 +559,21 @@ export const useStore = create<AppStore>()(
           ...state,
           providers: normalizeProviders(legacyProviders),
           apiKeys: migratedKeys,
+          activePage: 'providers',
           selectedProviderId: (state as any).selectedServiceId ?? null,
+          gatewayConfig: sanitizeGatewayConfigResources(
+            normalizeGatewayConfig(undefined),
+            normalizeProviders(legacyProviders),
+            migratedKeys,
+          ),
         } as AppState;
       },
       partialize: (state) => ({
+        activePage: state.activePage,
         providers: state.providers,
         apiKeys: state.apiKeys,
         selectedProviderId: state.selectedProviderId,
+        gatewayConfig: state.gatewayConfig,
       }),
     }
   )

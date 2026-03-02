@@ -14,7 +14,7 @@ export interface SecuritySettings {
  */
 export async function encryptApiKey(apiKey: string): Promise<string> {
   try {
-    return await invoke('encrypt_data', { data: apiKey });
+    return await invoke<string>('encrypt_data', { data: apiKey });
   } catch (error) {
     console.error('Encryption failed:', error);
     // 如果加密失败，返回原始数据（向后兼容）
@@ -33,7 +33,7 @@ export async function decryptApiKey(encryptedKey: string): Promise<string> {
       return encryptedKey;
     }
 
-    const result = await invoke('decrypt_data', { encryptedData: encryptedKey });
+    const result = await invoke<string>('decrypt_data', { encryptedData: encryptedKey });
 
     // 检查解密结果是否仍然像加密数据
     if (typeof result === 'string' && result.startsWith('{"nonce":')) {
@@ -77,14 +77,14 @@ export async function authenticateBiometric(reason?: string): Promise<boolean> {
  * 设置密码
  */
 export async function setupPassword(password: string): Promise<void> {
-  return await invoke('setup_password', { password });
+  return await invoke<void>('setup_password', { password });
 }
 
 /**
  * 验证密码
  */
 export async function verifyPassword(password: string): Promise<boolean> {
-  return await invoke('verify_password', { password });
+  return await invoke<boolean>('verify_password', { password });
 }
 
 /**
@@ -92,7 +92,7 @@ export async function verifyPassword(password: string): Promise<boolean> {
  */
 export async function hasPassword(): Promise<boolean> {
   try {
-    return await invoke('has_password');
+    return await invoke<boolean>('has_password');
   } catch {
     return false;
   }
@@ -102,7 +102,7 @@ export async function hasPassword(): Promise<boolean> {
  * 修改密码（需要验证原密码）
  */
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
-  return await invoke('change_password', { oldPassword, newPassword });
+  return await invoke<void>('change_password', { oldPassword, newPassword });
 }
 
 /**

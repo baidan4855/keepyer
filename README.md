@@ -1,8 +1,23 @@
+<p align="center">
+  <img src="public/icon.png" alt="Keeyper Icon" width="120" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-2.0.0-3b82f6" alt="Version 2.0.0" />
+  <img src="https://img.shields.io/badge/license-MIT-10b981" alt="MIT License" />
+  <img src="https://img.shields.io/badge/Tauri-2.x-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2.x" />
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white" alt="React 18" />
+  <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.x" />
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-64748b" alt="Platforms" />
+</p>
+
 # Keeyper
 
-A cross-platform LLM API key manager — a clean, lightweight desktop app for managing API keys from different AI providers.
+A cross-platform LLM gateway and debugging workbench — focused on protocol routing, model debugging, security probing, with provider/key management built in.
 
 > 中文说明请见 `README.zh-CN.md`。
+>
+> Current version: `2.0.0`.
 
 ## Features
 
@@ -12,18 +27,45 @@ A cross-platform LLM API key manager — a clean, lightweight desktop app for ma
 - **Quick copy**: One-click copy provider base URL and API keys
 - **Model search**: Search models by name or ID in the model list
 - **Model testing**: Test individual models to verify availability (supports OpenAI & Claude protocols)
+- **LLM gateway (Anthropic-compatible)**: Route Claude model IDs to configured providers/models with a gateway token
+- **Gateway runtime control**: Start/stop gateway process and inspect runtime logs in-app
 - **Local storage**: All data stays on device, nothing is uploaded
 - **Cross-platform**: Windows, macOS, and Linux
 - **Lightweight**: Built with Tauri, around 10MB
 
 ## Screenshots
 
-Below are two key views of the app so you can quickly understand the workflow.
+Five key pages are shown below.
 
-![Main Page](assets/main_page.png)
-The main dashboard shows providers, keys, and their status at a glance.
+### 1. Main Dashboard
+
+Provider and key overview, including key status and quick actions.
+
+![Main Dashboard](assets/main.png)
+
+### 2. Model List
+
+Search and review available models under the selected key/provider.
+
 ![Model List](assets/model_list.png)
-The model list helps you review and manage model availability per key/provider.
+
+### 3. Debug Chat
+
+Run single debug requests with model/protocol controls and inspect responses.
+
+![Debug Chat](assets/debug.png)
+
+### 4. Security Probe
+
+Execute multi-case security probing and view pass/warn/fail matrix results.
+
+![Security Probe](assets/probe.png)
+
+### 5. LLM Gateway
+
+Configure model routing and manage gateway runtime status/logs.
+
+![LLM Gateway](assets/gateway.png)
 
 ## Development Setup
 
@@ -143,6 +185,12 @@ Compared to Electron, Tauri offers:
 - **Lower memory usage**: Uses the system WebView
 - **Better security**: Rust memory safety
 - **Faster startup**: Lighter runtime
+
+## Acknowledgements
+
+This project was fully developed with `Codex` and `Claude Code`.
+
+Special thanks to both tooling teams for enabling rapid iteration from product ideas to implementation.
 
 ## License
 

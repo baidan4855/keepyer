@@ -1,7 +1,7 @@
 [package]
 name = "keeyper"
-version = "1.1.0"
-description = "跨平台大模型 API Key 管理工具"
+version = "2.0.0"
+description = "跨平台 LLM 代理与调试工作台"
 authors = ["Keeyper"]
 license = "MIT"
 repository = "https://github.com/yourusername/keeyper"
@@ -28,6 +28,7 @@ aes-gcm = "0.10"
 base64 = "0.22"
 rand = "0.8"
 dirs = "5.0"
-reqwest = { version = "0.12", features = ["json", "native-tls"] }
+reqwest = { version = "0.12", features = ["json", "native-tls", "stream"] }
 rfd = "0.15"
 tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["http1", "json", "tokio"] }
