@@ -136,6 +136,17 @@ export interface ClaudeGatewayConfig {
 }
 
 /**
+ * Claude Code 网关配置方案
+ */
+export interface GatewayConfigProfile {
+  id: string;
+  name: string;
+  config: ClaudeGatewayConfig;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
  * 模型测试结果
  */
 export interface ModelTestResult {
@@ -219,5 +230,7 @@ export interface AppState {
   keyTokenUsage: Record<string, TokenUsageStats>;
   providerTokenUsage: Record<string, TokenUsageStats>;
   liveModelTokenUsage: Record<string, LiveTokenUsageDelta>;
+  gatewayConfigProfiles: GatewayConfigProfile[];
+  activeGatewayConfigProfileId: string | null;
   gatewayConfig: ClaudeGatewayConfig;
 }

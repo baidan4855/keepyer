@@ -6,6 +6,7 @@ import type {
   Provider,
   ApiKey,
   ClaudeGatewayConfig,
+  GatewayConfigProfile,
 } from '@/types';
 import { useStore } from '@/store';
 import { encryptApiKey } from './secure-storage';
@@ -34,6 +35,8 @@ export interface ExportData {
   services?: Provider[]; // legacy (import only)
   apiKeys: ExportApiKey[];
   gatewayConfig?: ClaudeGatewayConfig;
+  gatewayConfigProfiles?: GatewayConfigProfile[];
+  activeGatewayConfigProfileId?: string | null;
 }
 
 function toISOString(date: Date | string | undefined): string | undefined {
@@ -59,7 +62,13 @@ async function saveJsonFile(fileName: string, data: unknown): Promise<void> {
  */
 export async function exportData(): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
-  const { providers, apiKeys, gatewayConfig } = useStore.getState();
+  const {
+    providers,
+    apiKeys,
+    gatewayConfig,
+    gatewayConfigProfiles,
+    activeGatewayConfigProfileId,
+  } = useStore.getState();
 
   const exportKeys: ExportApiKey[] = await Promise.all(
     apiKeys.map(async (key) => {
@@ -97,6 +106,8 @@ export async function exportData(): Promise<void> {
     providers,
     apiKeys: exportKeys,
     gatewayConfig,
+    gatewayConfigProfiles,
+    activeGatewayConfigProfileId,
   };
 
   const fileName = `keeyper-backup-${new Date().toISOString().split('T')[0]}.json`;
@@ -173,7 +184,13 @@ export async function importData(file: File): Promise<void> {
           });
 
         const mergedKeys = Array.from(keysMap.values());
-        useStore.getState().importData(mergedProviders, mergedKeys, data.gatewayConfig);
+        useStore.getState().importData(
+          mergedProviders,
+          mergedKeys,
+          data.gatewayConfig,
+          data.gatewayConfigProfiles,
+          data.activeGatewayConfigProfileId ?? null,
+        );
         resolve();
       } catch (error) {
         reject(error);

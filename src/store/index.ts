@@ -15,6 +15,7 @@ import type {
   ApiModel,
   ModelTestResult,
   ClaudeGatewayConfig,
+  GatewayConfigProfile,
   TokenUsageStats,
   LiveTokenUsageDelta,
 } from '@/types';
@@ -40,7 +41,13 @@ interface StoreActions {
   deleteKey: (id: string) => void;
 
   // 批量导入数据
-  importData: (providers: Provider[], apiKeys: ApiKey[], gatewayConfig?: ClaudeGatewayConfig) => void;
+  importData: (
+    providers: Provider[],
+    apiKeys: ApiKey[],
+    gatewayConfig?: ClaudeGatewayConfig,
+    gatewayConfigProfiles?: GatewayConfigProfile[],
+    activeGatewayConfigProfileId?: string | null,
+  ) => void;
 
   // UI 状态
   setActivePage: (page: 'providers' | 'gateway') => void;
@@ -67,6 +74,10 @@ interface StoreActions {
   setGatewayConfig: (config: ClaudeGatewayConfig) => void;
   updateGatewayConfig: (config: Partial<ClaudeGatewayConfig>) => void;
   resetGatewayConfig: () => void;
+  createGatewayConfigProfile: (name?: string, config?: ClaudeGatewayConfig) => string;
+  renameGatewayConfigProfile: (profileId: string, name: string) => void;
+  deleteGatewayConfigProfile: (profileId: string) => void;
+  setActiveGatewayConfigProfile: (profileId: string) => void;
 
   // 获取提供方列表（带状态）
   getProvidersWithKeys: () => ReturnType<typeof buildProviderWithKeys>[];
@@ -211,6 +222,184 @@ function sanitizeGatewayConfigResources(
   return {
     ...gatewayConfig,
     modelMappings: nextMappings,
+  };
+}
+
+function cloneGatewayConfig(config: ClaudeGatewayConfig): ClaudeGatewayConfig {
+  const modelMappings: Record<string, GatewayConfigProfile['config']['modelMappings'][string]> = {};
+  Object.entries(config.modelMappings).forEach(([sourceModel, mapping]) => {
+    modelMappings[sourceModel] = {
+      providerId: mapping.providerId,
+      keyId: mapping.keyId,
+      targetModel: mapping.targetModel,
+    };
+  });
+  return {
+    ...config,
+    modelMappings,
+  };
+}
+
+function getGatewayDefaultProfileName(): string {
+  const localized = i18n.t('gateway.profileDefaultName');
+  if (typeof localized === 'string' && localized.trim()) {
+    return localized.trim();
+  }
+  return 'Default Profile';
+}
+
+function getGatewayProfileNameBase(): string {
+  const localized = i18n.t('gateway.profileNameBase');
+  if (typeof localized === 'string' && localized.trim()) {
+    return localized.trim();
+  }
+  return 'Profile';
+}
+
+function buildUniqueGatewayProfileName(
+  existing: GatewayConfigProfile[],
+  preferredName?: string,
+): string {
+  const used = new Set(existing.map((profile) => profile.name.trim()).filter(Boolean));
+  const preferred = preferredName?.trim();
+  if (preferred && !used.has(preferred)) {
+    return preferred;
+  }
+
+  const base = getGatewayProfileNameBase();
+  let index = 1;
+  let candidate = `${base} ${index}`;
+  while (used.has(candidate)) {
+    index += 1;
+    candidate = `${base} ${index}`;
+  }
+  return candidate;
+}
+
+function createGatewayConfigProfile(
+  name: string,
+  config: ClaudeGatewayConfig,
+): GatewayConfigProfile {
+  const now = new Date();
+  return {
+    id: generateId(),
+    name: name.trim() || getGatewayDefaultProfileName(),
+    config: cloneGatewayConfig(config),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function normalizeGatewayConfigProfiles(
+  profiles: GatewayConfigProfile[] | undefined,
+  providers: Provider[],
+  apiKeys: ApiKey[],
+): GatewayConfigProfile[] {
+  if (!Array.isArray(profiles)) {
+    return [];
+  }
+
+  const usedIds = new Set<string>();
+  const result: GatewayConfigProfile[] = [];
+
+  profiles.forEach((profile) => {
+    if (!profile || typeof profile !== 'object') return;
+    const profileId = typeof profile.id === 'string' ? profile.id.trim() : '';
+    const id = profileId || generateId();
+    if (usedIds.has(id)) return;
+    usedIds.add(id);
+
+    const name = typeof profile.name === 'string' ? profile.name.trim() : '';
+    const config = sanitizeGatewayConfigResources(
+      normalizeGatewayConfig(profile.config),
+      providers,
+      apiKeys,
+    );
+    const createdAt = profile.createdAt instanceof Date ? profile.createdAt : new Date();
+    const updatedAt = profile.updatedAt instanceof Date ? profile.updatedAt : new Date();
+
+    result.push({
+      id,
+      name: name || buildUniqueGatewayProfileName(result),
+      config,
+      createdAt,
+      updatedAt,
+    });
+  });
+
+  return result;
+}
+
+function resolveGatewayProfileState(
+  gatewayConfig: ClaudeGatewayConfig,
+  gatewayConfigProfiles: GatewayConfigProfile[] | undefined,
+  activeGatewayConfigProfileId: string | null | undefined,
+  providers: Provider[],
+  apiKeys: ApiKey[],
+): {
+  gatewayConfig: ClaudeGatewayConfig;
+  gatewayConfigProfiles: GatewayConfigProfile[];
+  activeGatewayConfigProfileId: string;
+} {
+  const sanitizedGatewayConfig = sanitizeGatewayConfigResources(
+    normalizeGatewayConfig(gatewayConfig),
+    providers,
+    apiKeys,
+  );
+  let profiles = normalizeGatewayConfigProfiles(gatewayConfigProfiles, providers, apiKeys);
+  if (!profiles.length) {
+    profiles = [createGatewayConfigProfile(getGatewayDefaultProfileName(), sanitizedGatewayConfig)];
+  }
+
+  const requestedActiveId = typeof activeGatewayConfigProfileId === 'string'
+    ? activeGatewayConfigProfileId.trim()
+    : '';
+  const activeProfile = profiles.find((profile) => profile.id === requestedActiveId) || profiles[0];
+
+  return {
+    gatewayConfig: cloneGatewayConfig(activeProfile.config),
+    gatewayConfigProfiles: profiles,
+    activeGatewayConfigProfileId: activeProfile.id,
+  };
+}
+
+function syncGatewayConfigToActiveProfile(
+  gatewayConfig: ClaudeGatewayConfig,
+  gatewayConfigProfiles: GatewayConfigProfile[] | undefined,
+  activeGatewayConfigProfileId: string | null | undefined,
+  providers: Provider[],
+  apiKeys: ApiKey[],
+): {
+  gatewayConfig: ClaudeGatewayConfig;
+  gatewayConfigProfiles: GatewayConfigProfile[];
+  activeGatewayConfigProfileId: string;
+} {
+  const resolved = resolveGatewayProfileState(
+    gatewayConfig,
+    gatewayConfigProfiles,
+    activeGatewayConfigProfileId,
+    providers,
+    apiKeys,
+  );
+  const sanitizedConfig = sanitizeGatewayConfigResources(
+    normalizeGatewayConfig(gatewayConfig),
+    providers,
+    apiKeys,
+  );
+  const now = new Date();
+
+  return {
+    gatewayConfig: cloneGatewayConfig(sanitizedConfig),
+    gatewayConfigProfiles: resolved.gatewayConfigProfiles.map((profile) =>
+      profile.id === resolved.activeGatewayConfigProfileId
+        ? {
+            ...profile,
+            config: cloneGatewayConfig(sanitizedConfig),
+            updatedAt: now,
+          }
+        : profile,
+    ),
+    activeGatewayConfigProfileId: resolved.activeGatewayConfigProfileId,
   };
 }
 
@@ -401,6 +590,12 @@ function getLiveUsageForProvider(
   return { inputTokens, outputTokens, totalTokens, updatedAt };
 }
 
+const initialGatewayConfig = createDefaultGatewayConfig();
+const initialGatewayProfile = createGatewayConfigProfile(
+  getGatewayDefaultProfileName(),
+  initialGatewayConfig,
+);
+
 const initialState: AppState = {
   activePage: 'providers',
   providers: [],
@@ -429,7 +624,9 @@ const initialState: AppState = {
   lastAuthTime: null,
   modelTestResults: {},
   ...createEmptyTokenUsageState(),
-  gatewayConfig: createDefaultGatewayConfig(),
+  gatewayConfigProfiles: [initialGatewayProfile],
+  activeGatewayConfigProfileId: initialGatewayProfile.id,
+  gatewayConfig: cloneGatewayConfig(initialGatewayConfig),
 };
 
 const PERSIST_STORAGE_KEY = 'keeyper-storage';
@@ -574,7 +771,13 @@ export const useStore = create<AppStore>()(
         set((state) => {
           const providers = state.providers.filter((provider) => provider.id !== id);
           const apiKeys = state.apiKeys.filter((key) => key.providerId !== id);
-          const gatewayConfig = sanitizeGatewayConfigResources(state.gatewayConfig, providers, apiKeys);
+          const gatewayProfileState = resolveGatewayProfileState(
+            state.gatewayConfig,
+            state.gatewayConfigProfiles,
+            state.activeGatewayConfigProfileId,
+            providers,
+            apiKeys,
+          );
           const tokenUsageState = sanitizeTokenUsageState(
             {
               modelTokenUsage: state.modelTokenUsage,
@@ -593,7 +796,9 @@ export const useStore = create<AppStore>()(
           return {
             providers,
             apiKeys,
-            gatewayConfig,
+            gatewayConfig: gatewayProfileState.gatewayConfig,
+            gatewayConfigProfiles: gatewayProfileState.gatewayConfigProfiles,
+            activeGatewayConfigProfileId: gatewayProfileState.activeGatewayConfigProfileId,
             ...tokenUsageState,
             liveModelTokenUsage,
             selectedProviderId:
@@ -658,7 +863,13 @@ export const useStore = create<AppStore>()(
           const removed = state.apiKeys.filter((key) => key.id !== id);
           const withDefaultKey = ensureCodexProvidersHaveDefaultKey(state.providers, removed);
           const apiKeys = ensureCodexKeysHaveDefaultModels(state.providers, withDefaultKey);
-          const gatewayConfig = sanitizeGatewayConfigResources(state.gatewayConfig, state.providers, apiKeys);
+          const gatewayProfileState = resolveGatewayProfileState(
+            state.gatewayConfig,
+            state.gatewayConfigProfiles,
+            state.activeGatewayConfigProfileId,
+            state.providers,
+            apiKeys,
+          );
           const tokenUsageState = sanitizeTokenUsageState(
             {
               modelTokenUsage: state.modelTokenUsage,
@@ -675,7 +886,9 @@ export const useStore = create<AppStore>()(
           );
           return {
             apiKeys,
-            gatewayConfig,
+            gatewayConfig: gatewayProfileState.gatewayConfig,
+            gatewayConfigProfiles: gatewayProfileState.gatewayConfigProfiles,
+            activeGatewayConfigProfileId: gatewayProfileState.activeGatewayConfigProfileId,
             ...tokenUsageState,
             liveModelTokenUsage,
           };
@@ -729,32 +942,131 @@ export const useStore = create<AppStore>()(
         return Date.now() - state.lastAuthTime < TEN_MINUTES;
       },
       setGatewayConfig: (config) =>
-        set((state) => ({
-          gatewayConfig: sanitizeGatewayConfigResources(
+        set((state) =>
+          syncGatewayConfigToActiveProfile(
             normalizeGatewayConfig(config),
+            state.gatewayConfigProfiles,
+            state.activeGatewayConfigProfileId,
             state.providers,
             state.apiKeys,
           ),
-        })),
+        ),
       updateGatewayConfig: (config) =>
-        set((state) => ({
-          gatewayConfig: sanitizeGatewayConfigResources(
+        set((state) =>
+          syncGatewayConfigToActiveProfile(
             normalizeGatewayConfig({
               ...state.gatewayConfig,
               ...config,
             }),
+            state.gatewayConfigProfiles,
+            state.activeGatewayConfigProfileId,
             state.providers,
             state.apiKeys,
           ),
-        })),
+        ),
       resetGatewayConfig: () =>
-        set((state) => ({
-          gatewayConfig: sanitizeGatewayConfigResources(
+        set((state) =>
+          syncGatewayConfigToActiveProfile(
             createDefaultGatewayConfig(),
+            state.gatewayConfigProfiles,
+            state.activeGatewayConfigProfileId,
             state.providers,
             state.apiKeys,
           ),
-        })),
+        ),
+      createGatewayConfigProfile: (name, config) => {
+        let createdId = '';
+        set((state) => {
+          const resolved = resolveGatewayProfileState(
+            state.gatewayConfig,
+            state.gatewayConfigProfiles,
+            state.activeGatewayConfigProfileId,
+            state.providers,
+            state.apiKeys,
+          );
+          const nextConfig = sanitizeGatewayConfigResources(
+            normalizeGatewayConfig(config ?? state.gatewayConfig),
+            state.providers,
+            state.apiKeys,
+          );
+          const nextName = buildUniqueGatewayProfileName(
+            resolved.gatewayConfigProfiles,
+            name,
+          );
+          const nextProfile = createGatewayConfigProfile(nextName, nextConfig);
+          createdId = nextProfile.id;
+          return {
+            gatewayConfig: cloneGatewayConfig(nextConfig),
+            gatewayConfigProfiles: [...resolved.gatewayConfigProfiles, nextProfile],
+            activeGatewayConfigProfileId: nextProfile.id,
+          };
+        });
+        return createdId;
+      },
+      renameGatewayConfigProfile: (profileId, name) =>
+        set((state) => {
+          const normalizedId = profileId.trim();
+          if (!normalizedId) return {};
+          const normalizedName = name.trim();
+          if (!normalizedName) return {};
+          let changed = false;
+          const now = new Date();
+          const existingWithoutCurrent = state.gatewayConfigProfiles.filter(
+            (profile) => profile.id !== normalizedId,
+          );
+          const finalName = buildUniqueGatewayProfileName(existingWithoutCurrent, normalizedName);
+
+          const gatewayConfigProfiles = state.gatewayConfigProfiles.map((profile) => {
+            if (profile.id !== normalizedId) return profile;
+            if (profile.name === finalName) return profile;
+            changed = true;
+            return {
+              ...profile,
+              name: finalName,
+              updatedAt: now,
+            };
+          });
+          return changed ? { gatewayConfigProfiles } : {};
+        }),
+      deleteGatewayConfigProfile: (profileId) =>
+        set((state) => {
+          const normalizedId = profileId.trim();
+          if (!normalizedId) return {};
+          if (state.gatewayConfigProfiles.length <= 1) return {};
+
+          const remaining = state.gatewayConfigProfiles.filter((profile) => profile.id !== normalizedId);
+          if (remaining.length === state.gatewayConfigProfiles.length) return {};
+          const nextActiveId = state.activeGatewayConfigProfileId === normalizedId
+            ? remaining[0]?.id || null
+            : state.activeGatewayConfigProfileId;
+          const nextActive = remaining.find((profile) => profile.id === nextActiveId) || remaining[0];
+          if (!nextActive) return {};
+
+          return {
+            gatewayConfigProfiles: remaining,
+            activeGatewayConfigProfileId: nextActive.id,
+            gatewayConfig: cloneGatewayConfig(nextActive.config),
+          };
+        }),
+      setActiveGatewayConfigProfile: (profileId) =>
+        set((state) => {
+          const normalizedId = profileId.trim();
+          if (!normalizedId) return {};
+          const resolved = resolveGatewayProfileState(
+            state.gatewayConfig,
+            state.gatewayConfigProfiles,
+            state.activeGatewayConfigProfileId,
+            state.providers,
+            state.apiKeys,
+          );
+          const nextActive = resolved.gatewayConfigProfiles.find((profile) => profile.id === normalizedId);
+          if (!nextActive) return {};
+          return {
+            gatewayConfigProfiles: resolved.gatewayConfigProfiles,
+            activeGatewayConfigProfileId: nextActive.id,
+            gatewayConfig: cloneGatewayConfig(nextActive.config),
+          };
+        }),
 
       // 获取方法
       getProvidersWithKeys: () => {
@@ -903,7 +1215,13 @@ export const useStore = create<AppStore>()(
       },
 
       // 批量导入数据
-      importData: (providers, apiKeys, gatewayConfig) => {
+      importData: (
+        providers,
+        apiKeys,
+        gatewayConfig,
+        gatewayConfigProfiles,
+        activeGatewayConfigProfileId,
+      ) => {
         const defaultSystemPrompt = getLocalizedDefaultSystemPrompt();
         const normalizedGatewayConfig = gatewayConfig
           ? normalizeGatewayConfig(gatewayConfig)
@@ -926,6 +1244,13 @@ export const useStore = create<AppStore>()(
           normalizedProviders,
           normalizedApiKeys,
         );
+        const gatewayProfileState = resolveGatewayProfileState(
+          sanitizedGatewayConfig,
+          gatewayConfigProfiles ?? get().gatewayConfigProfiles,
+          activeGatewayConfigProfileId ?? get().activeGatewayConfigProfileId,
+          normalizedProviders,
+          normalizedApiKeys,
+        );
         const tokenUsageState = sanitizeTokenUsageState(
           {
             modelTokenUsage: get().modelTokenUsage,
@@ -943,7 +1268,9 @@ export const useStore = create<AppStore>()(
         set({
           providers: normalizedProviders,
           apiKeys: normalizedApiKeys,
-          gatewayConfig: sanitizedGatewayConfig,
+          gatewayConfig: gatewayProfileState.gatewayConfig,
+          gatewayConfigProfiles: gatewayProfileState.gatewayConfigProfiles,
+          activeGatewayConfigProfileId: gatewayProfileState.activeGatewayConfigProfileId,
           ...tokenUsageState,
           liveModelTokenUsage,
         });
@@ -951,7 +1278,7 @@ export const useStore = create<AppStore>()(
     }),
     {
       name: PERSIST_STORAGE_KEY,
-      version: 8,
+      version: 9,
       storage: createJSONStorage(() => localStorage, {
         reviver: dateReviver,
       }),
@@ -990,6 +1317,13 @@ export const useStore = create<AppStore>()(
             normalizedProviders,
             normalizedApiKeys,
           );
+          const gatewayProfileState = resolveGatewayProfileState(
+            gatewayConfig,
+            ((state as any).gatewayConfigProfiles ?? []) as GatewayConfigProfile[],
+            ((state as any).activeGatewayConfigProfileId ?? null) as string | null,
+            normalizedProviders,
+            normalizedApiKeys,
+          );
           const tokenUsageState = sanitizeTokenUsageState(
             {
               modelTokenUsage: ((state as any).modelTokenUsage ?? {}) as Record<string, TokenUsageStats>,
@@ -1004,7 +1338,9 @@ export const useStore = create<AppStore>()(
             activePage: (state as any).activePage === 'gateway' ? 'gateway' : 'providers',
             providers: normalizedProviders,
             apiKeys: normalizedApiKeys,
-            gatewayConfig,
+            gatewayConfig: gatewayProfileState.gatewayConfig,
+            gatewayConfigProfiles: gatewayProfileState.gatewayConfigProfiles,
+            activeGatewayConfigProfileId: gatewayProfileState.activeGatewayConfigProfileId,
             ...tokenUsageState,
             liveModelTokenUsage: {},
           } as AppState;
@@ -1026,17 +1362,23 @@ export const useStore = create<AppStore>()(
           withDefaultKey,
         );
 
+        const gatewayProfileState = resolveGatewayProfileState(
+          createDefaultGatewayConfig(),
+          [],
+          null,
+          normalizedLegacyProviders,
+          normalizedMigratedKeys,
+        );
+
         return {
           ...state,
           providers: normalizedLegacyProviders,
           apiKeys: normalizedMigratedKeys,
           activePage: 'providers',
           selectedProviderId: (state as any).selectedServiceId ?? null,
-          gatewayConfig: sanitizeGatewayConfigResources(
-            normalizeGatewayConfig(undefined),
-            normalizedLegacyProviders,
-            normalizedMigratedKeys,
-          ),
+          gatewayConfig: gatewayProfileState.gatewayConfig,
+          gatewayConfigProfiles: gatewayProfileState.gatewayConfigProfiles,
+          activeGatewayConfigProfileId: gatewayProfileState.activeGatewayConfigProfileId,
           ...createEmptyTokenUsageState(),
         } as AppState;
       },
@@ -1046,6 +1388,8 @@ export const useStore = create<AppStore>()(
         apiKeys: state.apiKeys,
         selectedProviderId: state.selectedProviderId,
         gatewayConfig: state.gatewayConfig,
+        gatewayConfigProfiles: state.gatewayConfigProfiles,
+        activeGatewayConfigProfileId: state.activeGatewayConfigProfileId,
         modelTokenUsage: state.modelTokenUsage,
         keyTokenUsage: state.keyTokenUsage,
         providerTokenUsage: state.providerTokenUsage,

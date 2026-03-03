@@ -42,6 +42,27 @@ function cloneGatewayConfig(config: ClaudeGatewayConfig): ClaudeGatewayConfig {
   };
 }
 
+function gatewayConfigSignature(config: ClaudeGatewayConfig): string {
+  const sortedMappings = Object.entries(config.modelMappings)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .reduce<Record<string, GatewayModelMapping>>((acc, [sourceModel, mapping]) => {
+      acc[sourceModel] = {
+        providerId: mapping.providerId,
+        keyId: mapping.keyId,
+        targetModel: mapping.targetModel,
+      };
+      return acc;
+    }, {});
+
+  return JSON.stringify({
+    listenHost: config.listenHost.trim(),
+    listenPort: Math.floor(config.listenPort),
+    gatewayToken: config.gatewayToken,
+    requestLog: config.requestLog !== false,
+    modelMappings: sortedMappings,
+  });
+}
+
 function buildUniqueName(base: string, existing: Set<string>): string {
   if (!existing.has(base)) return base;
   let index = 1;
@@ -310,20 +331,52 @@ export default function GatewayDashboard() {
     providers,
     apiKeys,
     gatewayConfig,
+    gatewayConfigProfiles,
+    activeGatewayConfigProfileId,
     setGatewayConfig,
     resetGatewayConfig,
+    createGatewayConfigProfile,
+    renameGatewayConfigProfile,
+    deleteGatewayConfigProfile,
+    setActiveGatewayConfigProfile,
   } = useStore();
   const [activeTab, setActiveTab] = useState<GatewayTab>("config");
   const [draft, setDraft] = useState<ClaudeGatewayConfig>(() =>
     cloneGatewayConfig(gatewayConfig),
   );
+  const [profileNameInput, setProfileNameInput] = useState("");
   const [status, setStatus] = useState<GatewayProcessStatus>(EMPTY_STATUS);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const activeProfile = useMemo(
+    () =>
+      gatewayConfigProfiles.find(
+        (profile) => profile.id === activeGatewayConfigProfileId,
+      ) ||
+      gatewayConfigProfiles[0] ||
+      null,
+    [gatewayConfigProfiles, activeGatewayConfigProfileId],
+  );
+  const hasUnsavedChanges = useMemo(
+    () => gatewayConfigSignature(draft) !== gatewayConfigSignature(gatewayConfig),
+    [draft, gatewayConfig],
+  );
+  const profileOptions = useMemo(
+    () =>
+      gatewayConfigProfiles.map((profile) => ({
+        value: profile.id,
+        label: profile.name,
+      })),
+    [gatewayConfigProfiles],
+  );
 
   useEffect(() => {
     setDraft(cloneGatewayConfig(gatewayConfig));
   }, [gatewayConfig]);
+
+  useEffect(() => {
+    setProfileNameInput(activeProfile?.name || "");
+  }, [activeProfile?.id, activeProfile?.name]);
 
   const refreshStatus = async () => {
     try {
@@ -349,6 +402,56 @@ export default function GatewayDashboard() {
     const latest = useStore.getState().gatewayConfig;
     setDraft(cloneGatewayConfig(latest));
     toast.success(t("gateway.configReset") || "网关配置已重置");
+  };
+
+  const handleSwitchProfile = (profileId: string) => {
+    const nextProfileId = profileId.trim();
+    if (!nextProfileId || nextProfileId === activeGatewayConfigProfileId) return;
+    if (hasUnsavedChanges) {
+      const confirmed = window.confirm(
+        t("gateway.profileSwitchConfirm") ||
+          "当前有未保存修改，切换方案将丢失这些修改，是否继续？",
+      );
+      if (!confirmed) return;
+    }
+    setActiveGatewayConfigProfile(nextProfileId);
+  };
+
+  const handleCreateProfile = () => {
+    createGatewayConfigProfile(undefined, draft);
+    toast.success(t("gateway.profileCreated") || "已创建新配置方案");
+  };
+
+  const handleRenameProfile = () => {
+    if (!activeProfile) return;
+    const name = profileNameInput.trim();
+    if (!name) {
+      setProfileNameInput(activeProfile.name);
+      return;
+    }
+    if (name === activeProfile.name) return;
+    renameGatewayConfigProfile(activeProfile.id, name);
+    const latestName =
+      useStore
+        .getState()
+        .gatewayConfigProfiles.find((profile) => profile.id === activeProfile.id)
+        ?.name || name;
+    setProfileNameInput(latestName);
+    toast.success(t("gateway.profileRenamed") || "配置方案已重命名");
+  };
+
+  const handleDeleteProfile = () => {
+    if (gatewayConfigProfiles.length <= 1) {
+      toast.error(t("gateway.profileDeleteBlocked") || "至少保留一个配置方案");
+      return;
+    }
+    if (!activeProfile) return;
+    const confirmed = window.confirm(
+      t("gateway.profileDeleteConfirm") || "确认删除当前配置方案吗？",
+    );
+    if (!confirmed) return;
+    deleteGatewayConfigProfile(activeProfile.id);
+    toast.success(t("gateway.profileDeleted") || "已删除配置方案");
   };
 
   const handleAddMapping = () => {
@@ -537,11 +640,94 @@ export default function GatewayDashboard() {
 
           {activeTab === "config" ? (
             <div className="pt-4 space-y-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-800">
+                    {t("gateway.profileSection") || "配置方案"}
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleCreateProfile}
+                      className="btn-secondary py-1.5 px-2.5 text-xs inline-flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      {t("gateway.profileCreate") || "新建方案"}
+                    </button>
+                    <button
+                      onClick={handleDeleteProfile}
+                      className="btn-secondary py-1.5 px-2.5 text-xs inline-flex items-center gap-1 text-red-600"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      {t("gateway.profileDelete") || "删除方案"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-[minmax(0,220px)_minmax(0,1fr)_auto] gap-3">
+                  <div className="min-w-0">
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      {t("gateway.profileSelect") || "选择方案"}
+                    </label>
+                    <SearchableSelect
+                      value={activeProfile?.id || ""}
+                      onChange={handleSwitchProfile}
+                      options={profileOptions}
+                      placeholder={t("gateway.profileSelect") || "选择方案"}
+                      searchPlaceholder={
+                        t("gateway.profileSearch") || "搜索配置方案..."
+                      }
+                      noResultsText={
+                        t("gateway.profileNoResults") || "未找到匹配方案"
+                      }
+                    />
+                  </div>
+
+                  <div className="min-w-0">
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      {t("gateway.profileName") || "方案名称"}
+                    </label>
+                    <input
+                      type="text"
+                      value={profileNameInput}
+                      onChange={(event) => setProfileNameInput(event.target.value)}
+                      onBlur={handleRenameProfile}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        event.preventDefault();
+                        handleRenameProfile();
+                      }}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      className="input py-2.5 px-3 text-sm"
+                      placeholder={
+                        t("gateway.profileNamePlaceholder") || "输入方案名称"
+                      }
+                    />
+                  </div>
+
+                  <div className="flex items-end">
+                    <button
+                      onClick={handleRenameProfile}
+                      className="btn-secondary py-2 px-3 text-xs"
+                    >
+                      {t("gateway.profileRename") || "重命名"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-slate-800">
                   {t("gateway.configSection") || "网关配置"}
                 </h3>
                 <div className="flex items-center gap-2">
+                  {hasUnsavedChanges ? (
+                    <span className="text-xs text-amber-600">
+                      {t("gateway.unsavedHint") ||
+                        "当前存在未保存配置，启动前建议先保存。"}
+                    </span>
+                  ) : null}
                   <button
                     onClick={handleResetConfig}
                     className="btn-secondary py-1.5 px-2.5 text-xs"

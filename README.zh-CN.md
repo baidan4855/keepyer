@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.0.0-3b82f6" alt="版本 2.0.0" />
+  <img src="https://img.shields.io/badge/version-2.1.0-3b82f6" alt="版本 2.1.0" />
   <img src="https://img.shields.io/badge/license-MIT-10b981" alt="MIT 许可证" />
   <img src="https://img.shields.io/badge/Tauri-2.x-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2.x" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white" alt="React 18" />
@@ -17,7 +17,7 @@
 
 > English documentation: `README.md`.
 >
-> 当前版本：`2.0.0`。
+> 当前版本：`2.1.0`。
 
 ## 功能特性
 

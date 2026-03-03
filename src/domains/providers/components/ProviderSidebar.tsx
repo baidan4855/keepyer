@@ -38,7 +38,7 @@ export default function ProviderSidebar() {
               <h1 className="text-lg font-bold text-slate-800 truncate">
                 {t("app.name")}
               </h1>
-              <span className="text-xs text-slate-400 font-normal">v2.0.0</span>
+              <span className="text-xs text-slate-400 font-normal">v2.1.0</span>
             </div>
             <p className="text-[11px] text-slate-500 truncate">
               {t("app.description")}
