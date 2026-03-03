@@ -1,5 +1,6 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(debug_assertions)]
 use tauri::Manager;
 
 pub fn run() {
@@ -11,6 +12,8 @@ pub fn run() {
                     window.open_devtools();
                 }
             }
+            #[cfg(not(debug_assertions))]
+            let _ = app;
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
@@ -29,6 +32,7 @@ pub fn run() {
             get_gateway_process_status,
             start_gateway_process,
             stop_gateway_process,
+            test_gateway_proxy,
             save_file
         ])
         .run(tauri::generate_context!())
@@ -48,10 +52,13 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose, Engine as _};
+use futures_util::stream;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::Infallible;
+use std::env;
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
@@ -60,7 +67,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
 use tokio::process::Command;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Serialize, Deserialize)]
 struct EncryptedData {
@@ -144,11 +151,31 @@ struct GatewayProcessStatus {
     last_exit_at: Option<u64>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GatewayProxyTestResult {
+    ok: bool,
+    status: Option<u16>,
+    duration_ms: u64,
+    url: String,
+    via: String,
+    message: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GatewayRuntimeListen {
     host: String,
     port: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct GatewayRuntimeProxy {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    url: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -185,6 +212,8 @@ struct GatewayRuntimeModelMapping {
 struct GatewayRuntimeConfig {
     gateway_token: String,
     listen: GatewayRuntimeListen,
+    #[serde(default)]
+    proxy: GatewayRuntimeProxy,
     default_route: String,
     request_log: bool,
     routes: HashMap<String, GatewayRuntimeRouteConfig>,
@@ -224,6 +253,20 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     duration.as_millis() as u64
+}
+
+fn is_truthy_env(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn gateway_use_system_proxy() -> bool {
+    env::var("KEEYPER_USE_SYSTEM_PROXY")
+        .ok()
+        .map(|value| is_truthy_env(&value))
+        .unwrap_or(false)
 }
 
 fn push_gateway_log(state: &mut GatewayProcessState, line: String) {
@@ -467,10 +510,16 @@ async fn http_request(
     use reqwest::Client;
 
     // 构建带连接池的客户端
-    let client = Client::builder()
+    let use_system_proxy = gateway_use_system_proxy();
+    let mut client_builder = Client::builder()
         .use_native_tls()
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(12));
+    if !use_system_proxy {
+        client_builder = client_builder.no_proxy();
+    }
+    let client = client_builder
         .build()
         .map_err(|e| format!("创建客户端失败: {}", e))?;
 
@@ -555,9 +604,416 @@ async fn http_request(
     Err(last_error)
 }
 
+#[tauri::command]
+async fn test_gateway_proxy(
+    proxy_enabled: bool,
+    proxy_url: String,
+    test_url: String,
+    timeout_ms: Option<u64>,
+) -> GatewayProxyTestResult {
+    let started_at = now_millis();
+    let target = test_url.trim().to_string();
+    if target.is_empty() {
+        return GatewayProxyTestResult {
+            ok: false,
+            status: None,
+            duration_ms: now_millis().saturating_sub(started_at),
+            url: String::new(),
+            via: "unknown".to_string(),
+            message: "Missing test URL".to_string(),
+        };
+    }
+    if !(target.starts_with("http://") || target.starts_with("https://")) {
+        return GatewayProxyTestResult {
+            ok: false,
+            status: None,
+            duration_ms: now_millis().saturating_sub(started_at),
+            url: target,
+            via: "unknown".to_string(),
+            message: "Test URL must start with http:// or https://".to_string(),
+        };
+    }
+
+    let proxy_url_trimmed = proxy_url.trim().to_string();
+    let via = if !proxy_enabled {
+        "direct".to_string()
+    } else if proxy_url_trimmed.is_empty() {
+        "system".to_string()
+    } else {
+        "custom".to_string()
+    };
+
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(12_000).clamp(1_000, 120_000));
+    let mut builder = reqwest::Client::builder()
+        .use_native_tls()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(timeout)
+        .tcp_nodelay(true)
+        .http1_only();
+    if !proxy_enabled {
+        builder = builder.no_proxy();
+    } else if !proxy_url_trimmed.is_empty() {
+        match reqwest::Proxy::all(&proxy_url_trimmed) {
+            Ok(proxy) => builder = builder.proxy(proxy),
+            Err(error) => {
+                return GatewayProxyTestResult {
+                    ok: false,
+                    status: None,
+                    duration_ms: now_millis().saturating_sub(started_at),
+                    url: target,
+                    via,
+                    message: format!("Invalid proxy URL: {}", error),
+                };
+            }
+        }
+    }
+
+    let client = match builder.build() {
+        Ok(value) => value,
+        Err(error) => {
+            return GatewayProxyTestResult {
+                ok: false,
+                status: None,
+                duration_ms: now_millis().saturating_sub(started_at),
+                url: target,
+                via,
+                message: format!("Failed to build HTTP client: {}", error),
+            };
+        }
+    };
+
+    match client.get(&target).send().await {
+        Ok(response) => GatewayProxyTestResult {
+            ok: true,
+            status: Some(response.status().as_u16()),
+            duration_ms: now_millis().saturating_sub(started_at),
+            url: target,
+            via,
+            message: format!(
+                "Connected (HTTP {})",
+                response.status().as_u16()
+            ),
+        },
+        Err(error) => GatewayProxyTestResult {
+            ok: false,
+            status: None,
+            duration_ms: now_millis().saturating_sub(started_at),
+            url: target,
+            via,
+            message: error.to_string(),
+        },
+    }
+}
+
 fn should_retry_with_reasoning_override(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
     lower.contains("model_reasoning_effort") && lower.contains("unknown variant")
+}
+
+fn push_unique_codex_candidate(candidates: &mut Vec<String>, value: String) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if candidates.iter().any(|item| item == trimmed) {
+        return;
+    }
+    candidates.push(trimmed.to_string());
+}
+
+fn normalize_shell_codex_candidate(raw_line: &str) -> Option<String> {
+    let trimmed = raw_line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let simple = trimmed.trim_matches('"').trim_matches('\'').to_string();
+    if simple.contains('/') {
+        return Some(simple);
+    }
+    if simple.eq_ignore_ascii_case("codex")
+        || simple.to_ascii_lowercase().ends_with("codex.exe")
+        || simple.to_ascii_lowercase().ends_with("\\codex.exe")
+    {
+        return Some(simple);
+    }
+
+    for token in trimmed.split_whitespace().rev() {
+        let candidate = token.trim_matches('"').trim_matches('\'');
+        if candidate.is_empty() {
+            continue;
+        }
+        let lower = candidate.to_ascii_lowercase();
+        if candidate.contains('/')
+            || candidate.contains('\\')
+            || lower == "codex"
+            || lower.ends_with("codex.exe")
+        {
+            return Some(candidate.to_string());
+        }
+    }
+
+    Some(simple)
+}
+
+async fn discover_codex_candidate_from_shell(shell: &str, probe: &str) -> Option<String> {
+    let output = Command::new(shell)
+        .arg("-ilc")
+        .arg(probe)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .find_map(normalize_shell_codex_candidate)
+}
+
+fn collect_codex_absolute_candidates() -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    if let Ok(custom) = env::var("CODEX_CLI_PATH") {
+        push_unique_codex_candidate(&mut candidates, custom);
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        push_unique_codex_candidate(
+            &mut candidates,
+            home.join(".local/bin/codex").to_string_lossy().to_string(),
+        );
+        push_unique_codex_candidate(
+            &mut candidates,
+            home.join("bin/codex").to_string_lossy().to_string(),
+        );
+        push_unique_codex_candidate(
+            &mut candidates,
+            home.join(".volta/bin/codex").to_string_lossy().to_string(),
+        );
+        push_unique_codex_candidate(
+            &mut candidates,
+            home.join(".asdf/shims/codex").to_string_lossy().to_string(),
+        );
+        push_unique_codex_candidate(
+            &mut candidates,
+            home.join(".npm-global/bin/codex").to_string_lossy().to_string(),
+        );
+        push_unique_codex_candidate(
+            &mut candidates,
+            home.join(".fnm/current/bin/codex").to_string_lossy().to_string(),
+        );
+
+        let nvm_versions = home.join(".nvm").join("versions").join("node");
+        if let Ok(entries) = fs::read_dir(nvm_versions) {
+            for entry in entries.flatten() {
+                push_unique_codex_candidate(
+                    &mut candidates,
+                    entry.path().join("bin").join("codex").to_string_lossy().to_string(),
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        push_unique_codex_candidate(&mut candidates, "/opt/homebrew/bin/codex".to_string());
+        push_unique_codex_candidate(&mut candidates, "/usr/local/bin/codex".to_string());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        push_unique_codex_candidate(&mut candidates, "/usr/local/bin/codex".to_string());
+        push_unique_codex_candidate(&mut candidates, "/usr/bin/codex".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+            push_unique_codex_candidate(
+                &mut candidates,
+                PathBuf::from(&local_app_data)
+                    .join("Programs")
+                    .join("codex")
+                    .join("codex.exe")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            push_unique_codex_candidate(
+                &mut candidates,
+                PathBuf::from(&local_app_data)
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links")
+                    .join("codex.exe")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+    }
+
+    candidates
+}
+
+fn push_unique_existing_dir(dirs: &mut Vec<String>, dir: PathBuf) {
+    if !dir.is_dir() {
+        return;
+    }
+    let raw = dir.to_string_lossy().trim().to_string();
+    if raw.is_empty() {
+        return;
+    }
+    if dirs.iter().any(|item| item == &raw) {
+        return;
+    }
+    dirs.push(raw);
+}
+
+fn collect_additional_bin_dirs() -> Vec<String> {
+    let mut dirs: Vec<String> = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        push_unique_existing_dir(&mut dirs, PathBuf::from("/opt/homebrew/bin"));
+        push_unique_existing_dir(&mut dirs, PathBuf::from("/usr/local/bin"));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        push_unique_existing_dir(&mut dirs, PathBuf::from("/usr/local/bin"));
+        push_unique_existing_dir(&mut dirs, PathBuf::from("/usr/bin"));
+        push_unique_existing_dir(&mut dirs, PathBuf::from("/bin"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+            push_unique_existing_dir(
+                &mut dirs,
+                PathBuf::from(&local_app_data).join("Microsoft").join("WinGet").join("Links"),
+            );
+            push_unique_existing_dir(
+                &mut dirs,
+                PathBuf::from(&local_app_data).join("Programs").join("codex"),
+            );
+            push_unique_existing_dir(
+                &mut dirs,
+                PathBuf::from(&local_app_data).join("Volta").join("bin"),
+            );
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        push_unique_existing_dir(&mut dirs, home.join(".local").join("bin"));
+        push_unique_existing_dir(&mut dirs, home.join("bin"));
+        push_unique_existing_dir(&mut dirs, home.join(".volta").join("bin"));
+        push_unique_existing_dir(&mut dirs, home.join(".asdf").join("shims"));
+        push_unique_existing_dir(&mut dirs, home.join(".fnm"));
+
+        let nvm_versions = home.join(".nvm").join("versions").join("node");
+        if let Ok(entries) = fs::read_dir(nvm_versions) {
+            for entry in entries.flatten() {
+                push_unique_existing_dir(&mut dirs, entry.path().join("bin"));
+            }
+        }
+    }
+
+    dirs
+}
+
+fn apply_codex_command_path_env(
+    command: &mut Command,
+    executable: &str,
+    additional_bin_dirs: &[String],
+) {
+    let mut unique = HashSet::<String>::new();
+    let mut entries = Vec::<PathBuf>::new();
+
+    if let Ok(current_path) = env::var("PATH") {
+        for path in env::split_paths(&current_path) {
+            let normalized = path.to_string_lossy().to_string();
+            if normalized.is_empty() || !unique.insert(normalized) {
+                continue;
+            }
+            entries.push(path);
+        }
+    }
+
+    if executable.contains('/') || executable.contains('\\') {
+        if let Some(parent) = PathBuf::from(executable).parent() {
+            let normalized = parent.to_string_lossy().to_string();
+            if !normalized.is_empty() && unique.insert(normalized) {
+                entries.push(parent.to_path_buf());
+            }
+        }
+    }
+
+    for dir in additional_bin_dirs {
+        if dir.trim().is_empty() {
+            continue;
+        }
+        if unique.insert(dir.to_string()) {
+            entries.push(PathBuf::from(dir));
+        }
+    }
+
+    match env::join_paths(entries) {
+        Ok(joined) => {
+            command.env("PATH", joined);
+        }
+        Err(_) => {
+            #[cfg(windows)]
+            let sep = ";";
+            #[cfg(not(windows))]
+            let sep = ":";
+            let fallback = additional_bin_dirs.join(sep);
+            if !fallback.trim().is_empty() {
+                command.env("PATH", fallback);
+            }
+        }
+    }
+}
+
+async fn discover_codex_command_candidates() -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    // Try inherited PATH first (works for tauri:dev and terminal-started app).
+    push_unique_codex_candidate(&mut candidates, "codex".to_string());
+
+    // GUI-launched app may miss shell PATH; probe shell profiles for absolute path.
+    if let Some(path) = discover_codex_candidate_from_shell(
+        "/bin/zsh",
+        "whence -p codex 2>/dev/null || command -v codex 2>/dev/null || which codex 2>/dev/null",
+    )
+    .await
+    {
+        push_unique_codex_candidate(&mut candidates, path);
+    }
+    if let Some(path) = discover_codex_candidate_from_shell(
+        "/bin/bash",
+        "command -v codex 2>/dev/null || which codex 2>/dev/null",
+    )
+    .await
+    {
+        push_unique_codex_candidate(&mut candidates, path);
+    }
+    if let Some(path) = discover_codex_candidate_from_shell(
+        "/bin/sh",
+        "command -v codex 2>/dev/null || which codex 2>/dev/null",
+    )
+    .await
+    {
+        push_unique_codex_candidate(&mut candidates, path);
+    }
+
+    for candidate in collect_codex_absolute_candidates() {
+        push_unique_codex_candidate(&mut candidates, candidate);
+    }
+
+    candidates
 }
 
 async fn run_codex_command(
@@ -568,38 +1024,63 @@ async fn run_codex_command(
     timeout: Duration,
     force_reasoning_override: bool,
 ) -> Result<Output, String> {
-    let mut command = Command::new("codex");
-    command.arg("exec");
-    command.arg("--skip-git-repo-check");
-    command.arg("--color").arg("never");
+    let candidates = discover_codex_command_candidates().await;
+    let additional_bin_dirs = collect_additional_bin_dirs();
+    let mut last_error: Option<String> = None;
 
-    if force_reasoning_override {
-        command.arg("-c").arg(r#"model_reasoning_effort="high""#);
+    for executable in &candidates {
+        let mut command = Command::new(executable);
+        apply_codex_command_path_env(&mut command, executable, &additional_bin_dirs);
+        command.arg("exec");
+        command.arg("--skip-git-repo-check");
+        command.arg("--color").arg("never");
+
+        if force_reasoning_override {
+            command.arg("-c").arg(r#"model_reasoning_effort="high""#);
+        }
+
+        if let Some(model_name) = model {
+            command.arg("-m").arg(model_name);
+        }
+
+        if let Some(profile_name) = profile {
+            command.arg("-p").arg(profile_name);
+        }
+
+        if let Some(dir) = working_dir {
+            command.arg("-C").arg(dir);
+        }
+
+        command.arg(prompt);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+
+        match tokio::time::timeout(timeout, command.output()).await {
+            Ok(Ok(output)) => return Ok(output),
+            Ok(Err(error)) if error.kind() == ErrorKind::NotFound => {
+                continue;
+            }
+            Ok(Err(error)) => {
+                last_error = Some(format!("codex exec failed ({}): {}", executable, error));
+                continue;
+            }
+            Err(_) => {
+                return Err(format!(
+                    "codex exec timed out after {} ms",
+                    timeout.as_millis()
+                ));
+            }
+        }
     }
 
-    if let Some(model_name) = model {
-        command.arg("-m").arg(model_name);
+    if let Some(error) = last_error {
+        return Err(error);
     }
 
-    if let Some(profile_name) = profile {
-        command.arg("-p").arg(profile_name);
-    }
-
-    if let Some(dir) = working_dir {
-        command.arg("-C").arg(dir);
-    }
-
-    command.arg(prompt);
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-
-    match tokio::time::timeout(timeout, command.output()).await {
-        Ok(result) => result.map_err(|e| format!("codex exec failed: {}", e)),
-        Err(_) => Err(format!(
-            "codex exec timed out after {} ms",
-            timeout.as_millis()
-        )),
-    }
+    Err(
+        "codex executable not found. Please install Codex CLI and ensure PATH is available to the app, or set CODEX_CLI_PATH."
+            .to_string(),
+    )
 }
 
 #[tauri::command]
@@ -676,49 +1157,75 @@ async fn codex_exec(
 
 #[tauri::command]
 async fn get_codex_cli_status() -> Result<CodexCliStatus, String> {
-    let output = Command::new("codex")
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await;
+    let candidates = discover_codex_command_candidates().await;
+    let additional_bin_dirs = collect_additional_bin_dirs();
+    let mut last_error: Option<String> = None;
 
-    match output {
-        Ok(result) => {
-            let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
-            let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+    for executable in &candidates {
+        let mut command = Command::new(executable);
+        apply_codex_command_path_env(&mut command, executable, &additional_bin_dirs);
+        let output = command
+            .arg("--version")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
 
-            let version = if !stdout.is_empty() {
-                Some(stdout.clone())
-            } else if !stderr.is_empty() {
-                Some(stderr.clone())
-            } else {
-                None
-            };
+        match output {
+            Ok(result) => {
+                let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
 
-            let message = if result.status.success() {
-                None
-            } else if !stderr.is_empty() {
-                Some(stderr)
-            } else if !stdout.is_empty() {
-                Some(stdout)
-            } else {
-                Some(format!("codex --version exited with status {}", result.status))
-            };
+                let version = if !stdout.is_empty() {
+                    Some(stdout.clone())
+                } else if !stderr.is_empty() {
+                    Some(stderr.clone())
+                } else {
+                    None
+                };
 
-            Ok(CodexCliStatus {
-                installed: true,
-                version,
-                message,
-            })
+                let message = if result.status.success() {
+                    Some(format!("resolved via {}", executable))
+                } else if !stderr.is_empty() {
+                    Some(stderr)
+                } else if !stdout.is_empty() {
+                    Some(stdout)
+                } else {
+                    Some(format!("codex --version exited with status {}", result.status))
+                };
+
+                return Ok(CodexCliStatus {
+                    installed: true,
+                    version,
+                    message,
+                });
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                continue;
+            }
+            Err(error) => {
+                last_error = Some(format!("{}: {}", executable, error));
+                continue;
+            }
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(CodexCliStatus {
-            installed: false,
-            version: None,
-            message: Some("codex command not found in PATH".to_string()),
-        }),
-        Err(error) => Err(format!("Failed to check codex CLI: {}", error)),
     }
+
+    let message = if let Some(error) = last_error {
+        format!("Codex CLI was detected but failed to execute ({})", error)
+    } else if candidates.is_empty() {
+        "codex command not found in app environment".to_string()
+    } else {
+        format!(
+            "codex command not found in app environment (checked: {})",
+            candidates.join(", ")
+        )
+    };
+
+    Ok(CodexCliStatus {
+        installed: false,
+        version: None,
+        message: Some(message),
+    })
 }
 
 fn push_gateway_log_shared(shared_state: &Arc<Mutex<GatewayProcessState>>, line: String) {
@@ -1288,7 +1795,10 @@ fn convert_anthropic_request_to_openai(payload: &Value, target_model: &str) -> V
     output.insert("model".to_string(), json!(target_model));
     output.insert("messages".to_string(), Value::Array(messages));
     output.insert("max_tokens".to_string(), json!(max_tokens));
-    output.insert("stream".to_string(), json!(false));
+    output.insert(
+        "stream".to_string(),
+        json!(payload.get("stream").and_then(Value::as_bool).unwrap_or(false)),
+    );
 
     if let Some(temp) = payload.get("temperature") {
         output.insert("temperature".to_string(), temp.clone());
@@ -1599,6 +2109,547 @@ fn stream_anthropic_message(message_payload: &Value) -> String {
     output
 }
 
+#[derive(Clone, Debug)]
+struct OpenAiToolStreamBlock {
+    anthropic_index: usize,
+}
+
+struct OpenAiToAnthropicStreamBridge {
+    requested_model: String,
+    message_id: String,
+    message_model: String,
+    started: bool,
+    input_tokens: i64,
+    output_tokens_estimate: i64,
+    output_tokens_from_usage: Option<i64>,
+    finish_reason: Option<String>,
+    next_content_index: usize,
+    text_block_index: Option<usize>,
+    tool_blocks: HashMap<i64, OpenAiToolStreamBlock>,
+    open_blocks: HashSet<usize>,
+    saw_tool_use: bool,
+}
+
+impl OpenAiToAnthropicStreamBridge {
+    fn new(requested_model: &str, estimated_input_tokens: i64) -> Self {
+        let model = requested_model.trim();
+        Self {
+            requested_model: if model.is_empty() {
+                "unknown".to_string()
+            } else {
+                model.to_string()
+            },
+            message_id: format!("msg_{}", random_id("msg")),
+            message_model: if model.is_empty() {
+                "unknown".to_string()
+            } else {
+                model.to_string()
+            },
+            started: false,
+            input_tokens: estimated_input_tokens.max(0),
+            output_tokens_estimate: 0,
+            output_tokens_from_usage: None,
+            finish_reason: None,
+            next_content_index: 0,
+            text_block_index: None,
+            tool_blocks: HashMap::new(),
+            open_blocks: HashSet::new(),
+            saw_tool_use: false,
+        }
+    }
+
+    fn apply_usage(&mut self, payload: &Value) {
+        let Some(usage) = payload.get("usage") else {
+            return;
+        };
+        if let Some(prompt_tokens) = usage.get("prompt_tokens").and_then(Value::as_i64) {
+            self.input_tokens = prompt_tokens.max(0);
+        }
+        if let Some(completion_tokens) = usage.get("completion_tokens").and_then(Value::as_i64) {
+            self.output_tokens_from_usage = Some(completion_tokens.max(0));
+        }
+    }
+
+    fn ensure_message_start(&mut self, chunk: Option<&Value>, output: &mut Vec<Bytes>) {
+        if self.started {
+            return;
+        }
+        if let Some(payload) = chunk {
+            if let Some(id) = payload.get("id").and_then(Value::as_str) {
+                let trimmed = id.trim();
+                if !trimmed.is_empty() {
+                    self.message_id = trimmed.to_string();
+                }
+            }
+            if let Some(model) = payload.get("model").and_then(Value::as_str) {
+                let trimmed = model.trim();
+                if !trimmed.is_empty() {
+                    self.message_model = trimmed.to_string();
+                }
+            }
+        }
+        output.push(sse_event_bytes(
+            "message_start",
+            &json!({
+              "type": "message_start",
+              "message": {
+                "id": self.message_id,
+                "type": "message",
+                "role": "assistant",
+                "model": self.requested_model,
+                "content": [],
+                "stop_reason": Value::Null,
+                "stop_sequence": Value::Null,
+                "usage": {
+                  "input_tokens": self.input_tokens.max(0),
+                  "output_tokens": 0
+                }
+              }
+            }),
+        ));
+        self.started = true;
+    }
+
+    fn ensure_text_block_started(&mut self, output: &mut Vec<Bytes>) -> usize {
+        if let Some(index) = self.text_block_index {
+            return index;
+        }
+        let index = self.next_content_index;
+        self.next_content_index += 1;
+        self.text_block_index = Some(index);
+        self.open_blocks.insert(index);
+        output.push(sse_event_bytes(
+            "content_block_start",
+            &json!({
+              "type": "content_block_start",
+              "index": index,
+              "content_block": {
+                "type": "text",
+                "text": ""
+              }
+            }),
+        ));
+        index
+    }
+
+    fn ensure_tool_block_started(
+        &mut self,
+        openai_index: i64,
+        tool_id: Option<&str>,
+        tool_name: Option<&str>,
+        output: &mut Vec<Bytes>,
+    ) -> usize {
+        if let Some(existing) = self.tool_blocks.get(&openai_index) {
+            return existing.anthropic_index;
+        }
+        let id = tool_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| format!("toolu_{}", random_id("tool")));
+        let name = tool_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| "tool".to_string());
+        let anthropic_index = self.next_content_index;
+        self.next_content_index += 1;
+        self.tool_blocks.insert(
+            openai_index,
+            OpenAiToolStreamBlock {
+                anthropic_index,
+            },
+        );
+        self.open_blocks.insert(anthropic_index);
+        self.saw_tool_use = true;
+        output.push(sse_event_bytes(
+            "content_block_start",
+            &json!({
+              "type": "content_block_start",
+              "index": anthropic_index,
+              "content_block": {
+                "type": "tool_use",
+                "id": id,
+                "name": name,
+                "input": {}
+              }
+            }),
+        ));
+        anthropic_index
+    }
+
+    fn ingest_chunk(&mut self, chunk: &Value) -> Vec<Bytes> {
+        let mut output = Vec::new();
+        self.apply_usage(chunk);
+        self.ensure_message_start(Some(chunk), &mut output);
+
+        let choice = chunk
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .cloned()
+            .unwrap_or(Value::Null);
+
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            let trimmed = reason.trim();
+            if !trimmed.is_empty() {
+                self.finish_reason = Some(trimmed.to_string());
+            }
+        }
+
+        let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+        for text in openai_delta_text_parts(&delta) {
+            if text.is_empty() {
+                continue;
+            }
+            let index = self.ensure_text_block_started(&mut output);
+            self.output_tokens_estimate += estimate_text_tokens(&text);
+            output.push(sse_event_bytes(
+                "content_block_delta",
+                &json!({
+                  "type": "content_block_delta",
+                  "index": index,
+                  "delta": {
+                    "type": "text_delta",
+                    "text": text
+                  }
+                }),
+            ));
+        }
+
+        if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
+            for (fallback_index, tool_call) in tool_calls.iter().enumerate() {
+                let openai_index = tool_call
+                    .get("index")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(fallback_index as i64);
+                let function = tool_call.get("function").cloned().unwrap_or(Value::Null);
+                let tool_id = tool_call.get("id").and_then(Value::as_str);
+                let tool_name = function.get("name").and_then(Value::as_str);
+                let anthropic_index =
+                    self.ensure_tool_block_started(openai_index, tool_id, tool_name, &mut output);
+
+                let arguments_delta = function
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+                    .or_else(|| {
+                        let args = function.get("arguments")?;
+                        if args.is_object() || args.is_array() {
+                            return Some(args.to_string());
+                        }
+                        None
+                    })
+                    .unwrap_or_default();
+                if arguments_delta.is_empty() {
+                    continue;
+                }
+                self.output_tokens_estimate += estimate_text_tokens(&arguments_delta);
+                output.push(sse_event_bytes(
+                    "content_block_delta",
+                    &json!({
+                      "type": "content_block_delta",
+                      "index": anthropic_index,
+                      "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": arguments_delta
+                      }
+                    }),
+                ));
+            }
+        }
+
+        output
+    }
+
+    fn finalize(&mut self) -> (Vec<Bytes>, (i64, i64, i64)) {
+        let mut output = Vec::new();
+        self.ensure_message_start(None, &mut output);
+
+        let mut open_indices = self.open_blocks.iter().copied().collect::<Vec<_>>();
+        open_indices.sort_unstable();
+        for index in open_indices {
+            output.push(sse_event_bytes(
+                "content_block_stop",
+                &json!({
+                  "type": "content_block_stop",
+                  "index": index
+                }),
+            ));
+        }
+        self.open_blocks.clear();
+
+        let output_tokens = self
+            .output_tokens_from_usage
+            .unwrap_or(self.output_tokens_estimate.max(0))
+            .max(0);
+        let stop_reason = map_openai_finish_reason(self.finish_reason.as_deref(), self.saw_tool_use);
+        output.push(sse_event_bytes(
+            "message_delta",
+            &json!({
+              "type": "message_delta",
+              "delta": {
+                "stop_reason": stop_reason,
+                "stop_sequence": Value::Null
+              },
+              "usage": {
+                "output_tokens": output_tokens
+              }
+            }),
+        ));
+        output.push(sse_event_bytes(
+            "message_stop",
+            &json!({ "type": "message_stop" }),
+        ));
+
+        let input_tokens = self.input_tokens.max(0);
+        let total_tokens = input_tokens + output_tokens;
+        (output, (input_tokens, output_tokens, total_tokens))
+    }
+}
+
+fn sse_event_bytes(event: &str, data: &Value) -> Bytes {
+    let mut output = String::new();
+    write_sse_event(&mut output, event, data);
+    Bytes::from(output)
+}
+
+fn openai_delta_text_parts(delta: &Value) -> Vec<String> {
+    let mut parts = Vec::new();
+    let Some(content) = delta.get("content") else {
+        return parts;
+    };
+    if let Some(text) = content.as_str() {
+        if !text.is_empty() {
+            parts.push(text.to_string());
+        }
+        return parts;
+    }
+    if let Some(array) = content.as_array() {
+        for part in array {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                if !text.is_empty() {
+                    parts.push(text.to_string());
+                }
+            }
+        }
+    }
+    parts
+}
+
+fn find_sse_frame_delimiter(buffer: &str) -> Option<(usize, usize)> {
+    let lf = buffer.find("\n\n").map(|index| (index, 2));
+    let crlf = buffer.find("\r\n\r\n").map(|index| (index, 4));
+    match (lf, crlf) {
+        (Some(left), Some(right)) => {
+            if left.0 <= right.0 {
+                Some(left)
+            } else {
+                Some(right)
+            }
+        }
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn take_next_sse_frame(buffer: &mut String) -> Option<String> {
+    let (frame_end, delimiter_len) = find_sse_frame_delimiter(buffer)?;
+    let frame = buffer[..frame_end].to_string();
+    buffer.drain(..(frame_end + delimiter_len));
+    Some(frame)
+}
+
+fn extract_sse_payload(frame: &str) -> Option<String> {
+    let mut data_lines = Vec::new();
+    for raw_line in frame.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        if line.starts_with(':') {
+            continue;
+        }
+        let Some(value) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let value = value.strip_prefix(' ').unwrap_or(value);
+        data_lines.push(value.to_string());
+    }
+    if data_lines.is_empty() {
+        None
+    } else {
+        Some(data_lines.join("\n"))
+    }
+}
+
+fn extract_sse_data_line(line: &str) -> Option<String> {
+    let trimmed = line.trim_end_matches('\r');
+    if trimmed.is_empty() || trimmed.starts_with(':') {
+        return None;
+    }
+    let value = trimmed.strip_prefix("data:")?;
+    let value = value.strip_prefix(' ').unwrap_or(value);
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn take_next_sse_payload(buffer: &mut String) -> Option<String> {
+    if let Some(frame) = take_next_sse_frame(buffer) {
+        return extract_sse_payload(&frame);
+    }
+
+    while let Some(line_end) = buffer.find('\n') {
+        let line = buffer[..line_end].to_string();
+        buffer.drain(..(line_end + 1));
+        if let Some(payload) = extract_sse_data_line(&line) {
+            return Some(payload);
+        }
+    }
+
+    None
+}
+
+fn stream_openai_to_anthropic_body(
+    ctx: GatewayServerContext,
+    route: ResolvedRoute,
+    mapping: ResolvedModelMapping,
+    upstream: reqwest::Response,
+    estimated_input_tokens: i64,
+) -> Body {
+    let (tx, rx) = mpsc::channel::<Bytes>(32);
+    let stream_started_at = now_millis();
+    tauri::async_runtime::spawn(async move {
+        let mut upstream_response = upstream;
+        let mut parser_buffer = String::new();
+        let mut saw_done_marker = false;
+        let mut saw_first_chunk = false;
+        let mut bridge = OpenAiToAnthropicStreamBridge::new(&mapping.requested_model, estimated_input_tokens);
+
+        log_gateway_request(
+            &ctx,
+            "proxy.stream.openai.start",
+            &[
+                ("path", "/v1/messages".to_string()),
+                ("model", mapping.requested_model.clone()),
+                ("target", mapping.target_model.clone()),
+                ("route", route.name.clone()),
+            ],
+        );
+
+        'stream: loop {
+            let chunk = match upstream_response.chunk().await {
+                Ok(Some(value)) => value,
+                Ok(None) => break 'stream,
+                Err(error) => {
+                    log_gateway_request(
+                        &ctx,
+                        "proxy.stream.openai.error",
+                        &[
+                            ("path", "/v1/messages".to_string()),
+                            ("model", mapping.requested_model.clone()),
+                            ("target", mapping.target_model.clone()),
+                            ("route", route.name.clone()),
+                            ("error", error.to_string()),
+                        ],
+                    );
+                    break 'stream;
+                }
+            };
+
+            if !saw_first_chunk {
+                saw_first_chunk = true;
+                log_gateway_request(
+                    &ctx,
+                    "proxy.stream.openai.first_chunk",
+                    &[
+                        ("path", "/v1/messages".to_string()),
+                        ("model", mapping.requested_model.clone()),
+                        ("target", mapping.target_model.clone()),
+                        ("route", route.name.clone()),
+                        (
+                            "first_chunk_ms",
+                            now_millis().saturating_sub(stream_started_at).to_string(),
+                        ),
+                    ],
+                );
+            }
+
+            parser_buffer.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(payload) = take_next_sse_payload(&mut parser_buffer) {
+                let trimmed = payload.trim();
+                if trimmed.eq_ignore_ascii_case("[DONE]") {
+                    saw_done_marker = true;
+                    break 'stream;
+                }
+                let parsed = match serde_json::from_str::<Value>(trimmed) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                for event in bridge.ingest_chunk(&parsed) {
+                    if tx.send(event).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+
+        if !saw_done_marker {
+            if let Some(payload) = extract_sse_payload(parser_buffer.trim())
+                .or_else(|| extract_sse_data_line(parser_buffer.trim()))
+            {
+                let trimmed = payload.trim();
+                if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("[DONE]") {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+                        for event in bridge.ingest_chunk(&parsed) {
+                            if tx.send(event).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let (tail_events, usage) = bridge.finalize();
+        for event in tail_events {
+            if tx.send(event).await.is_err() {
+                return;
+            }
+        }
+        record_gateway_usage(&ctx, &route, &mapping, usage);
+        log_gateway_request(
+            &ctx,
+            "proxy.stream.openai.done",
+            &[
+                ("path", "/v1/messages".to_string()),
+                ("model", mapping.requested_model.clone()),
+                ("target", mapping.target_model.clone()),
+                ("route", route.name.clone()),
+                ("input_tokens", usage.0.to_string()),
+                ("output_tokens", usage.1.to_string()),
+                (
+                    "duration_ms",
+                    now_millis().saturating_sub(stream_started_at).to_string(),
+                ),
+            ],
+        );
+    });
+    let output_stream = stream::unfold(rx, |mut receiver| async move {
+        receiver
+            .recv()
+            .await
+            .map(|chunk| (Ok::<Bytes, Infallible>(chunk), receiver))
+    });
+    Body::from_stream(output_stream)
+}
+
+fn is_event_stream_content_type(content_type: &str) -> bool {
+    content_type
+        .to_ascii_lowercase()
+        .contains("text/event-stream")
+}
+
 fn estimate_input_tokens(payload: &Value) -> i64 {
     let relevant = json!({
       "system": payload.get("system").cloned().unwrap_or(Value::Null),
@@ -1833,10 +2884,30 @@ async fn fetch_anthropic_upstream(
 ) -> Result<reqwest::Response, String> {
     let api_key = route_api_key(route)?;
     let upstream_url = join_url(&route.config.base_url, path)?;
+    let stream_requested = payload
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static(if stream_requested {
+            "text/event-stream"
+        } else {
+            "application/json"
+        }),
+    );
+    headers.insert(
+        reqwest::header::CACHE_CONTROL,
+        reqwest::header::HeaderValue::from_static("no-cache"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT_ENCODING,
+        reqwest::header::HeaderValue::from_static("identity"),
     );
     let api_key_header = reqwest::header::HeaderValue::from_str(&api_key)
         .map_err(|e| format!("Invalid route API key header value: {}", e))?;
@@ -1889,11 +2960,31 @@ async fn fetch_openai_upstream(
 ) -> Result<reqwest::Response, String> {
     let api_key = route_api_key(route)?;
     let upstream_url = join_url(&route.config.base_url, path)?;
+    let stream_requested = payload
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static(if stream_requested {
+            "text/event-stream"
+        } else {
+            "application/json"
+        }),
+    );
+    headers.insert(
+        reqwest::header::CACHE_CONTROL,
+        reqwest::header::HeaderValue::from_static("no-cache"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT_ENCODING,
+        reqwest::header::HeaderValue::from_static("identity"),
     );
     headers.insert(
         reqwest::header::AUTHORIZATION,
@@ -2007,6 +3098,7 @@ async fn handle_anthropic_messages(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let upstream_started_at = now_millis();
     let upstream = match fetch_anthropic_upstream(
         ctx,
         route,
@@ -2025,14 +3117,37 @@ async fn handle_anthropic_messages(
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let passthrough_headers = copy_relevant_headers(upstream.headers());
+    let upstream_content_type = upstream
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    log_gateway_request(
+        ctx,
+        "proxy.upstream.headers",
+        &[
+            ("path", "/v1/messages".to_string()),
+            ("protocol", "anthropic".to_string()),
+            ("model", mapping.requested_model.clone()),
+            ("target", mapping.target_model.clone()),
+            ("route", route.name.clone()),
+            ("status", status.as_u16().to_string()),
+            ("stream_requested", stream.to_string()),
+            ("content_type", upstream_content_type.clone()),
+            (
+                "upstream_headers_ms",
+                now_millis().saturating_sub(upstream_started_at).to_string(),
+            ),
+        ],
+    );
 
     if stream {
-        let content_type = upstream
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("text/event-stream; charset=utf-8")
-            .to_string();
+        let content_type = if upstream_content_type.trim().is_empty() {
+            "text/event-stream; charset=utf-8".to_string()
+        } else {
+            upstream_content_type
+        };
         let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
         *response.status_mut() = status;
         for (name, value) in &passthrough_headers {
@@ -2085,51 +3200,148 @@ async fn handle_openai_messages(
     mapping: &ResolvedModelMapping,
     route: &ResolvedRoute,
 ) -> Response {
+    let stream_requested = payload
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let openai_payload = convert_anthropic_request_to_openai(payload, &mapping.target_model);
-    let (status, passthrough_headers, parsed) =
-        if matches!(route.config.protocol, GatewayRouteProtocol::Codex) {
-            match run_codex_gateway_completion(&openai_payload, mapping, route).await {
-                Ok(payload) => (StatusCode::OK, HeaderMap::new(), payload),
-                Err(error) => {
-                    return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error")
-                }
-            }
-        } else {
-            let upstream =
-                match fetch_openai_upstream(ctx, route, "/v1/chat/completions", &openai_payload)
-                    .await
-                {
-                    Ok(resp) => resp,
-                    Err(error) => {
-                        return anthropic_error_response(
-                            StatusCode::BAD_GATEWAY,
-                            &error,
-                            "api_error",
-                        )
-                    }
-                };
-            let status =
-                StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let passthrough_headers = copy_relevant_headers(upstream.headers());
-            let upstream_text = match upstream.text().await {
-                Ok(text) => text,
-                Err(error) => {
-                    return anthropic_error_response(
-                        StatusCode::BAD_GATEWAY,
-                        &format!("Failed to read upstream response: {}", error),
-                        "api_error",
-                    )
-                }
-            };
-            let parsed = serde_json::from_str::<Value>(&upstream_text).unwrap_or(Value::Null);
-            (status, passthrough_headers, parsed)
+
+    if matches!(route.config.protocol, GatewayRouteProtocol::Codex) {
+        let parsed = match run_codex_gateway_completion(&openai_payload, mapping, route).await {
+            Ok(value) => value,
+            Err(error) => return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error"),
         };
+        if let Some(usage) = extract_openai_usage(&parsed) {
+            record_gateway_usage(ctx, route, mapping, usage);
+        }
+        let anthropic_response =
+            convert_openai_response_to_anthropic(&parsed, &mapping.requested_model);
+        if stream_requested {
+            let mut response =
+                Response::new(Body::from(stream_anthropic_message(&anthropic_response)));
+            *response.status_mut() = StatusCode::OK;
+            response.headers_mut().insert(
+                HeaderName::from_static("content-type"),
+                HeaderValue::from_static("text/event-stream; charset=utf-8"),
+            );
+            response.headers_mut().insert(
+                HeaderName::from_static("cache-control"),
+                HeaderValue::from_static("no-cache, no-transform"),
+            );
+            response.headers_mut().insert(
+                HeaderName::from_static("connection"),
+                HeaderValue::from_static("keep-alive"),
+            );
+            response.headers_mut().insert(
+                HeaderName::from_static("x-accel-buffering"),
+                HeaderValue::from_static("no"),
+            );
+            return response;
+        }
+        return json_response_with_headers(StatusCode::OK, anthropic_response, &HeaderMap::new());
+    }
+
+    let upstream_started_at = now_millis();
+    let upstream = match fetch_openai_upstream(ctx, route, "/v1/chat/completions", &openai_payload).await
+    {
+        Ok(resp) => resp,
+        Err(error) => {
+            return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error");
+        }
+    };
+    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let passthrough_headers = copy_relevant_headers(upstream.headers());
+    let upstream_content_type = upstream
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    log_gateway_request(
+        ctx,
+        "proxy.upstream.headers",
+        &[
+            ("path", "/v1/messages".to_string()),
+            ("protocol", "openai".to_string()),
+            ("model", mapping.requested_model.clone()),
+            ("target", mapping.target_model.clone()),
+            ("route", route.name.clone()),
+            ("status", status.as_u16().to_string()),
+            ("stream_requested", stream_requested.to_string()),
+            ("content_type", upstream_content_type.clone()),
+            (
+                "upstream_headers_ms",
+                now_millis().saturating_sub(upstream_started_at).to_string(),
+            ),
+        ],
+    );
 
     if !status.is_success() {
+        let upstream_text = upstream.text().await.unwrap_or_else(|_| "{}".to_string());
+        let parsed = serde_json::from_str::<Value>(&upstream_text).unwrap_or(Value::Null);
         let message =
             extract_error_message(&parsed).unwrap_or_else(|| format!("Upstream error: {}", status));
         return anthropic_error_response(status, &message, "api_error");
     }
+
+    if stream_requested && is_event_stream_content_type(&upstream_content_type) {
+        let estimated_input_tokens = estimate_openai_input_tokens(&openai_payload).max(0);
+        let body = stream_openai_to_anthropic_body(
+            ctx.clone(),
+            route.clone(),
+            mapping.clone(),
+            upstream,
+            estimated_input_tokens,
+        );
+        let mut response = Response::new(body);
+        *response.status_mut() = StatusCode::OK;
+        for (name, value) in &passthrough_headers {
+            response.headers_mut().insert(name, value.clone());
+        }
+        response.headers_mut().insert(
+            HeaderName::from_static("content-type"),
+            HeaderValue::from_static("text/event-stream; charset=utf-8"),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("cache-control"),
+            HeaderValue::from_static("no-cache, no-transform"),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("keep-alive"),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("x-accel-buffering"),
+            HeaderValue::from_static("no"),
+        );
+        return response;
+    }
+
+    if stream_requested {
+        log_gateway_request(
+            ctx,
+            "proxy.stream.openai.non_sse",
+            &[
+                ("path", "/v1/messages".to_string()),
+                ("model", mapping.requested_model.clone()),
+                ("target", mapping.target_model.clone()),
+                ("route", route.name.clone()),
+                ("content_type", upstream_content_type.clone()),
+            ],
+        );
+    }
+
+    let upstream_text = match upstream.text().await {
+        Ok(text) => text,
+        Err(error) => {
+            return anthropic_error_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("Failed to read upstream response: {}", error),
+                "api_error",
+            )
+        }
+    };
+    let parsed = serde_json::from_str::<Value>(&upstream_text).unwrap_or(Value::Null);
     if !parsed.is_object() {
         return anthropic_error_response(
             StatusCode::BAD_GATEWAY,
@@ -2141,13 +3353,8 @@ async fn handle_openai_messages(
         record_gateway_usage(ctx, route, mapping, usage);
     }
 
-    let anthropic_response =
-        convert_openai_response_to_anthropic(&parsed, &mapping.requested_model);
-    if payload
-        .get("stream")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    let anthropic_response = convert_openai_response_to_anthropic(&parsed, &mapping.requested_model);
+    if stream_requested {
         let mut response = Response::new(Body::from(stream_anthropic_message(&anthropic_response)));
         *response.status_mut() = StatusCode::OK;
         for (name, value) in &passthrough_headers {
@@ -2229,42 +3436,26 @@ async fn handle_count_tokens(
         );
     }
 
-    let mut openai_payload = convert_anthropic_request_to_openai(payload, &mapping.target_model);
-    if let Some(obj) = openai_payload.as_object_mut() {
-        obj.insert("max_tokens".to_string(), json!(1));
-        obj.insert("temperature".to_string(), json!(0));
-        obj.insert("stream".to_string(), json!(false));
-    }
-
-    let upstream =
-        match fetch_openai_upstream(ctx, route, "/v1/chat/completions", &openai_payload).await {
-            Ok(resp) => resp,
-            Err(error) => {
-                return anthropic_error_response(StatusCode::BAD_GATEWAY, &error, "api_error")
-            }
-        };
-    let status =
-        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let passthrough_headers = copy_relevant_headers(upstream.headers());
-    let text = upstream.text().await.unwrap_or_else(|_| "{}".to_string());
-    let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-
-    if !status.is_success() {
-        let message =
-            extract_error_message(&parsed).unwrap_or_else(|| format!("Upstream error: {}", status));
-        return anthropic_error_response(status, &message, "api_error");
-    }
-    let prompt_tokens = parsed
-        .get("usage")
-        .and_then(|u| u.get("prompt_tokens"))
-        .and_then(Value::as_i64);
-    let input_tokens = prompt_tokens
-        .unwrap_or_else(|| estimate_input_tokens(payload))
-        .max(0);
+    // For OpenAI-compatible routes, use local estimation to avoid an extra
+    // upstream completion call that can significantly delay Claude preflight.
+    let openai_payload = convert_anthropic_request_to_openai(payload, &mapping.target_model);
+    let input_tokens = estimate_openai_input_tokens(&openai_payload).max(0);
+    log_gateway_request(
+        ctx,
+        "proxy.count_tokens.estimated",
+        &[
+            ("path", "/v1/messages/count_tokens".to_string()),
+            ("model", mapping.requested_model.clone()),
+            ("target", mapping.target_model.clone()),
+            ("route", route.name.clone()),
+            ("protocol", "openai".to_string()),
+            ("input_tokens", input_tokens.to_string()),
+        ],
+    );
     json_response_with_headers(
         StatusCode::OK,
         json!({ "input_tokens": input_tokens }),
-        &passthrough_headers,
+        &HeaderMap::new(),
     )
 }
 
@@ -2365,14 +3556,41 @@ async fn gateway_messages_handler(
         ],
     );
 
-    match route.config.protocol {
+    let request_started_at = now_millis();
+    let response = match route.config.protocol {
         GatewayRouteProtocol::Anthropic => {
             handle_anthropic_messages(&ctx, &headers, &payload, &mapping, &route).await
         }
         GatewayRouteProtocol::Openai | GatewayRouteProtocol::Codex => {
             handle_openai_messages(&ctx, &payload, &mapping, &route).await
         }
-    }
+    };
+    log_gateway_request(
+        &ctx,
+        "proxy.response",
+        &[
+            ("path", "/v1/messages".to_string()),
+            ("model", mapping.requested_model.clone()),
+            ("target", mapping.target_model.clone()),
+            ("route", route.name.clone()),
+            (
+                "protocol",
+                match route.config.protocol {
+                    GatewayRouteProtocol::Anthropic => "anthropic".to_string(),
+                    GatewayRouteProtocol::Openai => "openai".to_string(),
+                    GatewayRouteProtocol::Codex => "codex".to_string(),
+                },
+            ),
+            ("status", response.status().as_u16().to_string()),
+            (
+                "duration_ms",
+                now_millis()
+                    .saturating_sub(request_started_at)
+                    .to_string(),
+            ),
+        ],
+    );
+    response
 }
 
 async fn gateway_count_tokens_handler(
@@ -2452,7 +3670,34 @@ async fn gateway_count_tokens_handler(
         ],
     );
 
-    handle_count_tokens(&ctx, &headers, &payload, &mapping, &route).await
+    let request_started_at = now_millis();
+    let response = handle_count_tokens(&ctx, &headers, &payload, &mapping, &route).await;
+    log_gateway_request(
+        &ctx,
+        "proxy.response",
+        &[
+            ("path", "/v1/messages/count_tokens".to_string()),
+            ("model", mapping.requested_model.clone()),
+            ("target", mapping.target_model.clone()),
+            ("route", route.name.clone()),
+            (
+                "protocol",
+                match route.config.protocol {
+                    GatewayRouteProtocol::Anthropic => "anthropic".to_string(),
+                    GatewayRouteProtocol::Openai => "openai".to_string(),
+                    GatewayRouteProtocol::Codex => "codex".to_string(),
+                },
+            ),
+            ("status", response.status().as_u16().to_string()),
+            (
+                "duration_ms",
+                now_millis()
+                    .saturating_sub(request_started_at)
+                    .to_string(),
+            ),
+        ],
+    );
+    response
 }
 
 async fn gateway_not_found_handler() -> Response {
@@ -2537,10 +3782,30 @@ async fn start_gateway_process(
         }
     };
 
-    let client = reqwest::Client::builder()
+    let proxy_enabled = runtime_config.proxy.enabled;
+    let proxy_url = runtime_config.proxy.url.trim().to_string();
+    let proxy_mode = if !proxy_enabled {
+        "direct"
+    } else if proxy_url.is_empty() {
+        "system"
+    } else {
+        "custom"
+    };
+    let mut client_builder = reqwest::Client::builder()
         .use_native_tls()
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .timeout(std::time::Duration::from_secs(90))
+        .connect_timeout(std::time::Duration::from_secs(12))
+        .tcp_nodelay(true)
+        .http1_only();
+    if !proxy_enabled {
+        client_builder = client_builder.no_proxy();
+    } else if !proxy_url.is_empty() {
+        let proxy = reqwest::Proxy::all(&proxy_url)
+            .map_err(|e| format!("Invalid proxy URL in gateway config: {}", e))?;
+        client_builder = client_builder.proxy(proxy);
+    }
+    let client = client_builder
         .build()
         .map_err(|e| format!("Failed to build gateway HTTP client: {}", e))?;
 
@@ -2603,10 +3868,12 @@ async fn start_gateway_process(
         push_gateway_log(
             &mut state,
             format!(
-                "[gateway] rust server started (pid={}, host={}, port={})",
+                "[gateway] rust server started (pid={}, host={}, port={}, proxy_mode={}, proxy_url_set={}, upstream_transport=http1)",
                 std::process::id(),
                 bind_host,
-                bind_port
+                bind_port,
+                proxy_mode,
+                if proxy_url.is_empty() { "false" } else { "true" }
             ),
         );
     }

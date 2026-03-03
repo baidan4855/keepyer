@@ -114,6 +114,33 @@ npm run tauri:build:debug
 
 构建产物会输出到 `src-tauri/target/release/bundle/` 目录。
 
+### macOS 提示“文件已损坏，无法打开”
+
+如果 macOS 弹出类似 `Keeyper.app 已损坏，无法打开` 的提示，通常并不是真的二进制文件损坏。
+更常见原因是未签名/未公证的本地构建产物被 Gatekeeper 隔离（quarantine）。
+
+常见原因：
+
+1. 应用未经过 Apple 签名或公证。
+2. 应用包在下载/拷贝过程中带有 `com.apple.quarantine` 扩展属性。
+
+处理方法（仅对你信任的构建包执行）：
+
+1. 将应用移动到 `/Applications`，然后右键应用选择一次“打开”。
+2. 在终端移除隔离属性：
+
+```bash
+xattr -rd com.apple.quarantine /Applications/Keeyper.app
+```
+
+3. 可选：检查 Gatekeeper 评估结果：
+
+```bash
+spctl --assess --verbose=4 /Applications/Keeyper.app
+```
+
+4. 重新启动应用。若仍提示异常，请重新导出完整 `.app` 包后再试。
+
 ## 项目结构
 
 ```

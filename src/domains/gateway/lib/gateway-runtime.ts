@@ -30,6 +30,15 @@ export interface GatewayProcessStatus {
   lastExitAt?: number;
 }
 
+export interface GatewayProxyTestResult {
+  ok: boolean;
+  status?: number;
+  durationMs: number;
+  url: string;
+  via: 'direct' | 'system' | 'custom';
+  message: string;
+}
+
 export async function startGatewayProcess(
   runtimeConfig: GatewayRuntimeConfigFile,
 ): Promise<GatewayProcessStatus> {
@@ -46,4 +55,20 @@ export async function stopGatewayProcess(): Promise<GatewayProcessStatus> {
 
 export async function getGatewayProcessStatus(): Promise<GatewayProcessStatus> {
   return invoke<GatewayProcessStatus>('get_gateway_process_status');
+}
+
+export async function testGatewayProxy(
+  params: {
+    proxyEnabled: boolean;
+    proxyUrl: string;
+    testUrl: string;
+    timeoutMs?: number;
+  },
+): Promise<GatewayProxyTestResult> {
+  return invoke<GatewayProxyTestResult>('test_gateway_proxy', {
+    proxyEnabled: params.proxyEnabled,
+    proxyUrl: params.proxyUrl,
+    testUrl: params.testUrl,
+    timeoutMs: params.timeoutMs ?? 12000,
+  });
 }

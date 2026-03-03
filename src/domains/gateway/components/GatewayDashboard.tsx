@@ -24,6 +24,8 @@ import {
   startGatewayProcess,
   stopGatewayProcess,
   type GatewayProcessStatus,
+  type GatewayProxyTestResult,
+  testGatewayProxy,
 } from "@/domains/gateway/lib/gateway-runtime";
 import { toast } from "@/shared/lib/toast";
 import { cn } from "@/shared/lib/cn";
@@ -32,12 +34,30 @@ type GatewayTab = "config" | "logs";
 
 function cloneGatewayConfig(config: ClaudeGatewayConfig): ClaudeGatewayConfig {
   const modelMappings: Record<string, GatewayModelMapping> = {};
-  Object.entries(config.modelMappings).forEach(([name, mapping]) => {
+  Object.entries(config.modelMappings || {}).forEach(([name, mapping]) => {
     modelMappings[name] = { ...mapping };
   });
 
+  const listenHost =
+    typeof config.listenHost === "string" ? config.listenHost : "127.0.0.1";
+  const listenPort =
+    Number.isFinite(config.listenPort) && config.listenPort > 0
+      ? Math.floor(config.listenPort)
+      : 8787;
+  const gatewayToken =
+    typeof config.gatewayToken === "string" ? config.gatewayToken : "";
+  const proxyEnabled = config.proxyEnabled === true;
+  const proxyUrl = typeof config.proxyUrl === "string" ? config.proxyUrl : "";
+  const requestLog = config.requestLog !== false;
+
   return {
     ...config,
+    listenHost,
+    listenPort,
+    gatewayToken,
+    proxyEnabled,
+    proxyUrl,
+    requestLog,
     modelMappings,
   };
 }
@@ -55,9 +75,16 @@ function gatewayConfigSignature(config: ClaudeGatewayConfig): string {
     }, {});
 
   return JSON.stringify({
-    listenHost: config.listenHost.trim(),
-    listenPort: Math.floor(config.listenPort),
-    gatewayToken: config.gatewayToken,
+    listenHost:
+      typeof config.listenHost === "string" ? config.listenHost.trim() : "",
+    listenPort:
+      Number.isFinite(config.listenPort) && config.listenPort > 0
+        ? Math.floor(config.listenPort)
+        : 8787,
+    gatewayToken:
+      typeof config.gatewayToken === "string" ? config.gatewayToken : "",
+    proxyEnabled: config.proxyEnabled === true,
+    proxyUrl: typeof config.proxyUrl === "string" ? config.proxyUrl.trim() : "",
     requestLog: config.requestLog !== false,
     modelMappings: sortedMappings,
   });
@@ -103,6 +130,20 @@ function modelOptionsForKey(
     id: model.id,
     name: model.name || model.id,
   }));
+}
+
+function resolveProxyTestUrl(
+  config: ClaudeGatewayConfig,
+  providers: Provider[],
+): string {
+  const providerMap = new Map(providers.map((provider) => [provider.id, provider]));
+  for (const mapping of Object.values(config.modelMappings)) {
+    const baseUrl = providerMap.get(mapping.providerId)?.baseUrl?.trim() || "";
+    if (baseUrl) {
+      return baseUrl;
+    }
+  }
+  return "https://api.openai.com/v1/models";
 }
 
 type SelectOption = {
@@ -348,6 +389,9 @@ export default function GatewayDashboard() {
   const [status, setStatus] = useState<GatewayProcessStatus>(EMPTY_STATUS);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [isTestingProxy, setIsTestingProxy] = useState(false);
+  const [proxyTestResult, setProxyTestResult] =
+    useState<GatewayProxyTestResult | null>(null);
   const activeProfile = useMemo(
     () =>
       gatewayConfigProfiles.find(
@@ -539,6 +583,33 @@ export default function GatewayDashboard() {
       toast.error(message || t("gateway.startFailed") || "网关启动失败");
     } finally {
       setIsStarting(false);
+    }
+  };
+
+  const handleTestProxyConnectivity = async () => {
+    setIsTestingProxy(true);
+    try {
+      const testUrl = resolveProxyTestUrl(draft, providers);
+      const result = await testGatewayProxy({
+        proxyEnabled: draft.proxyEnabled === true,
+        proxyUrl: typeof draft.proxyUrl === "string" ? draft.proxyUrl.trim() : "",
+        testUrl,
+        timeoutMs: 12000,
+      });
+      setProxyTestResult(result);
+      if (result.ok) {
+        toast.success(t("gateway.proxyTestSuccess") || "代理连通性测试通过");
+      } else {
+        const fallback =
+          t("gateway.proxyTestFailed") || "代理连通性测试失败";
+        toast.error(result.message ? `${fallback}: ${result.message}` : fallback);
+      }
+    } catch (error) {
+      const fallback = t("gateway.proxyTestFailed") || "代理连通性测试失败";
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(message ? `${fallback}: ${message}` : fallback);
+    } finally {
+      setIsTestingProxy(false);
     }
   };
 
@@ -822,6 +893,92 @@ export default function GatewayDashboard() {
                 />
                 {t("gateway.requestLog") || "启用请求日志"}
               </label>
+
+              <div className="grid grid-cols-1 md:grid-cols-[220px_minmax(0,1fr)_auto] gap-3">
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={draft.proxyEnabled === true}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        proxyEnabled: event.target.checked,
+                      }))
+                    }
+                    className="rounded border-slate-300 text-primary-600 focus:ring-primary-500/30"
+                  />
+                  {t("gateway.proxyEnabled") || "使用代理"}
+                </label>
+                <div className="min-w-0">
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    {t("gateway.proxyUrl") || "代理地址"}
+                  </label>
+                  <input
+                    type="text"
+                    value={draft.proxyUrl}
+                    onChange={(event) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        proxyUrl: event.target.value,
+                      }))
+                    }
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    disabled={!draft.proxyEnabled}
+                    className={cn(
+                      "input py-2.5 px-3 text-sm font-mono",
+                      !draft.proxyEnabled && "opacity-60 cursor-not-allowed",
+                    )}
+                    placeholder={
+                      t("gateway.proxyUrlPlaceholder") ||
+                      "http://127.0.0.1:7890"
+                    }
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button
+                    onClick={() => void handleTestProxyConnectivity()}
+                    disabled={isTestingProxy}
+                    className="btn-secondary py-2 px-3 text-xs inline-flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    <RefreshCw
+                      className={cn(
+                        "w-3.5 h-3.5",
+                        isTestingProxy && "animate-spin",
+                      )}
+                    />
+                    {isTestingProxy
+                      ? t("gateway.proxyTesting") || "测试中..."
+                      : t("gateway.testProxy") || "代理连通性测试"}
+                  </button>
+                </div>
+              </div>
+              {proxyTestResult ? (
+                <div
+                  className={cn(
+                    "rounded-lg border px-3 py-2 text-xs space-y-1",
+                    proxyTestResult.ok
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-rose-200 bg-rose-50 text-rose-700",
+                  )}
+                >
+                  <div>
+                    {(t("gateway.proxyTestResult") || "最近一次测试") + ": "}
+                    {proxyTestResult.ok
+                      ? t("gateway.proxyTestSuccess") || "代理连通性测试通过"
+                      : t("gateway.proxyTestFailed") || "代理连通性测试失败"}
+                    {` · via=${proxyTestResult.via} · ${proxyTestResult.durationMs}ms`}
+                    {proxyTestResult.status
+                      ? ` · HTTP ${proxyTestResult.status}`
+                      : ""}
+                  </div>
+                  <div className="font-mono break-all">{proxyTestResult.url}</div>
+                  {!proxyTestResult.ok && proxyTestResult.message ? (
+                    <div className="break-all">{proxyTestResult.message}</div>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div>
                 <div className="flex items-center justify-between mb-2">

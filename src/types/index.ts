@@ -131,6 +131,8 @@ export interface ClaudeGatewayConfig {
   listenHost: string;
   listenPort: number;
   gatewayToken: string;
+  proxyEnabled: boolean;
+  proxyUrl: string;
   requestLog: boolean;
   modelMappings: Record<string, GatewayModelMapping>;
 }

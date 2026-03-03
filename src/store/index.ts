@@ -121,6 +121,8 @@ function createDefaultGatewayConfig(): ClaudeGatewayConfig {
     listenHost: '127.0.0.1',
     listenPort: 8787,
     gatewayToken: '',
+    proxyEnabled: false,
+    proxyUrl: '',
     requestLog: true,
     modelMappings: {},
   };
@@ -135,6 +137,9 @@ function normalizeGatewayConfig(config: unknown): ClaudeGatewayConfig {
   const raw = config as Record<string, unknown>;
   const rawRoutes = raw.routes && typeof raw.routes === 'object'
     ? raw.routes as Record<string, unknown>
+    : {};
+  const rawProxy = raw.proxy && typeof raw.proxy === 'object'
+    ? raw.proxy as Record<string, unknown>
     : {};
   const rawMappings = raw.modelMappings && typeof raw.modelMappings === 'object'
     ? raw.modelMappings as Record<string, unknown>
@@ -193,6 +198,12 @@ function normalizeGatewayConfig(config: unknown): ClaudeGatewayConfig {
       ? Math.floor(raw.listenPort)
       : defaults.listenPort,
     gatewayToken: typeof raw.gatewayToken === 'string' ? raw.gatewayToken : '',
+    proxyEnabled: typeof raw.proxyEnabled === 'boolean'
+      ? raw.proxyEnabled
+      : (typeof rawProxy.enabled === 'boolean' ? rawProxy.enabled : defaults.proxyEnabled),
+    proxyUrl: typeof raw.proxyUrl === 'string'
+      ? raw.proxyUrl
+      : (typeof rawProxy.url === 'string' ? rawProxy.url : defaults.proxyUrl),
     requestLog: raw.requestLog !== false,
     modelMappings,
   };
@@ -226,8 +237,9 @@ function sanitizeGatewayConfigResources(
 }
 
 function cloneGatewayConfig(config: ClaudeGatewayConfig): ClaudeGatewayConfig {
+  const normalized = normalizeGatewayConfig(config);
   const modelMappings: Record<string, GatewayConfigProfile['config']['modelMappings'][string]> = {};
-  Object.entries(config.modelMappings).forEach(([sourceModel, mapping]) => {
+  Object.entries(normalized.modelMappings).forEach(([sourceModel, mapping]) => {
     modelMappings[sourceModel] = {
       providerId: mapping.providerId,
       keyId: mapping.keyId,
@@ -235,7 +247,7 @@ function cloneGatewayConfig(config: ClaudeGatewayConfig): ClaudeGatewayConfig {
     };
   });
   return {
-    ...config,
+    ...normalized,
     modelMappings,
   };
 }

@@ -15,12 +15,18 @@ export interface GatewayRuntimeRouteConfig {
   anthropicVersion?: string;
 }
 
+export interface GatewayRuntimeProxyConfig {
+  enabled: boolean;
+  url: string;
+}
+
 export interface GatewayRuntimeConfigFile {
   gatewayToken: string;
   listen: {
     host: string;
     port: number;
   };
+  proxy: GatewayRuntimeProxyConfig;
   defaultRoute: string;
   requestLog: boolean;
   routes: Record<string, GatewayRuntimeRouteConfig>;
@@ -56,6 +62,10 @@ export async function buildGatewayRuntimeConfig(
   providers: Provider[],
   apiKeys: ApiKey[],
 ): Promise<GatewayRuntimeConfigFile> {
+  const proxyEnabled = gatewayConfig.proxyEnabled === true;
+  const proxyUrl = typeof gatewayConfig.proxyUrl === 'string'
+    ? gatewayConfig.proxyUrl.trim()
+    : '';
   const providerMap = new Map(providers.map((provider) => [provider.id, provider]));
   const keyMap = new Map(apiKeys.map((key) => [key.id, key]));
   const routeIdToName = new Map<string, string>();
@@ -130,6 +140,10 @@ export async function buildGatewayRuntimeConfig(
       port: Number.isFinite(gatewayConfig.listenPort) && gatewayConfig.listenPort > 0
         ? Math.floor(gatewayConfig.listenPort)
         : 8787,
+    },
+    proxy: {
+      enabled: proxyEnabled,
+      url: proxyUrl,
     },
     defaultRoute,
     requestLog: gatewayConfig.requestLog !== false,

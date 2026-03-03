@@ -123,6 +123,33 @@ macOS and Windows binaries, so Linux users must build locally if they need a nat
 2. Run `npm ci` followed by `npm run tauri:build`.
 3. Grab the bundle from `src-tauri/target/release/bundle/`.
 
+### macOS: "App is damaged and can't be opened"
+
+If macOS shows a message like `Keeyper.app is damaged and can't be opened`, it is usually not a real binary corruption issue.
+The common reason is Gatekeeper quarantine on an unsigned or non-notarized local build/package.
+
+Typical causes:
+
+1. The app was built/distributed without Apple notarization/signing.
+2. The app bundle was downloaded/copied with `com.apple.quarantine` extended attribute.
+
+How to fix (only for builds you trust):
+
+1. Move the app to `/Applications`, then right-click the app and choose **Open** once.
+2. Remove quarantine attribute in Terminal:
+
+```bash
+xattr -rd com.apple.quarantine /Applications/Keeyper.app
+```
+
+3. Optional: verify Gatekeeper assessment result:
+
+```bash
+spctl --assess --verbose=4 /Applications/Keeyper.app
+```
+
+4. Relaunch the app. If the message remains, rebuild/re-export the full `.app` bundle and try again.
+
 ## Project Structure
 
 ```
